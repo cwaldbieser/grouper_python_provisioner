@@ -4,6 +4,7 @@
 import argparse
 import contextlib
 from cPickle import loads
+import datetime
 import socket
 import SocketServer
 import sqlite3
@@ -349,7 +350,12 @@ def process_requests(db, conn_info):
         c.execute(sql)
         db.commit()
         
-    
+def elapsed_seconds(now, before):
+    """
+    """
+    delta = now - before
+    total_seconds = delta.seconds + 24*3600*delta.days
+    return total_seconds 
 
 def main(args):
     """
@@ -369,10 +375,15 @@ def main(args):
     
     server = CustomTCPServer(('127.0.0.1', 9600), MyTCPHandler)
     server.allow_reuse_address = True
-    server.timeout = 30 
+    server.timeout = 10 
     server.db = db
+    last_processed = None
     while True:
-        process_requests(db, conn_info)
+        now = datetime.datetime.today()
+        if last_processed is None or elapsed_seconds(now, last_processed) > 30:
+            print "[DEBUG] Processing requests ..."
+            process_requests(db, conn_info)
+            last_processed = now
         server.handle_request()
         print "handle_request() returned."
 
