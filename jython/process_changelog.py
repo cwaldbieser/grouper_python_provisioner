@@ -1,9 +1,10 @@
 
-#export CLASSPATH=/opt/jyson-1.0.2/lib/jyson-1.0.2.jar
+
 
 # Standard library
 import datetime
-from pickle import dumps
+import hmac
+import os.path
 import time
 import socket
 import sys
@@ -21,21 +22,71 @@ from edu.internet2.middleware.grouper.app.loader import GrouperLoaderStatus
 from edu.internet2.middleware.grouper.app.loader import GrouperLoader      
 from edu.internet2.middleware.grouper.app.loader import GrouperLoaderType
 
-
+HMAC_KEY = "HMAC key goes here."
 ENDPOINT=('127.0.0.1', 9600)
+CHANGEFILE=os.path.join(
+    os.path.dirname(__file__),
+    "last_change_id.txt")
 
-
-def send_group_mod(group, action_name, subject_id):
+def get_last_sequence():
     """
     """
-    d = dict(group=group, action=action_name, member=subject_id)
-    serialized = dumps(d) 
+    global CHANGEFILE
+    if os.path.exists(CHANGEFILE):
+        try:
+            f = open(CHANGEFILE, "r")
+            data = f.read().strip()
+            f.close()
+            pos = long(data)
+            return pos
+        except (Exception,), ex:
+            print "[WARNING] Could not get last sequence number."
+            print str(ex)
+            print
+            return None
+    return None
+        
+def update_last_sequence(n):
+    """
+    """
+    global CHANGEFILE
+    
+    f = open(CHANGEFILE, "w")
+    f.write(str(n))
+    f.close()
+
+def send_group_mod(group, action, subject):
+    """
+    """
+    #print "[DEBUG] Entered `send_group_mod()`."
+    global HMAC_KEY
+    
+    h = hmac.new(HMAC_KEY)
+    h.update(group)
+    h.update(action)
+    h.update(subject)
+    hexdigest = h.hexdigest()
+    #print "[DEBUG] Computed HMAC."
+    
+    data = """group:%s\r\naction:%s\r\nsubject:%s\r\nhmac:%s\r\n""" % (
+        group,
+        action,
+        subject,
+        hexdigest)
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         sock.connect(ENDPOINT)
-        sock.sendall(serialized + '\n')
-        received = sock.recv(1024)
-        if received != "OK":
+        sock.sendall(data)
+        print "[DEBUG] Sent data."
+        buf = []
+        while True:
+            received = sock.recv(1024)
+            if received is None or len(received) == 0:
+                break
+            buf.append(received)
+        result = ''.join(buf)
+        result = result.strip()
+        if result != "OK":
             raise Exception("Socket server responded with: %s" % received)
     finally:
         sock.close()
@@ -49,7 +100,11 @@ job_name = "CustomJob_%s" % d.strftime("%Y-%m-%dT%H:%M:%S")
 c.setName(job_name)
 consumer.saveOrUpdate(c)
 # Prime the last sequence number.
-c.setLastSequenceProcessed(GrouperUtil.defaultIfNull(ChangeLogEntry.maxSequenceNumber(True), 0).longValue()) 
+last_sequence = get_last_sequence()
+if last_sequence is None:
+    last_sequence = ChangeLogEntry.maxSequenceNumber(True)
+print "Last sequence number is %d." % last_sequence
+c.setLastSequenceProcessed(GrouperUtil.defaultIfNull(last_sequence, 0L).longValue()) 
 consumer.saveOrUpdate(c)
 hib3 = Hib3GrouperLoaderLog()
 hib3.setHost(GrouperUtil.hostname())
@@ -59,13 +114,14 @@ hib3.setStatus(GrouperLoaderStatus.RUNNING.name())
 attempt_num_entries = 100
 while True:
     GrouperLoader.runOnceByJobName(session, GrouperLoaderType.GROUPER_CHANGE_LOG_TEMP_TO_CHANGE_LOG)
-    l = factory.getChangeLogEntry().retrieveBatch(c.getLastSequenceProcessed(), attempt_num_entries)
+    last_sequence = c.getLastSequenceProcessed()
+    l = factory.getChangeLogEntry().retrieveBatch(last_sequence, attempt_num_entries)
     num_entries_retrieved = len(l)
-    gmods = [e for e in l 
-        if e.getChangeLogType().getActionName() == u'addMembership' 
-            or e.getChangeLogType().getActionName() == u'deleteMembership']  
-    for entry in gmods:                 
+    for n, entry in enumerate(l):
         action_name =  entry.getChangeLogType().getActionName()
+        if action_name != u'addMembership' and action_name != u'deleteMembership':
+            continue
+            
         subject_id = entry.retrieveValueForLabel(ChangeLogLabels.MEMBERSHIP_ADD.subjectId)
         group = entry.retrieveValueForLabel(ChangeLogLabels.MEMBERSHIP_ADD.groupName)
         #print "action_name", action_name
@@ -84,10 +140,11 @@ while True:
                 time.sleep(10)
                 continue
             break
+        update_last_sequence(n+last_sequence+1)
 
     c.setLastSequenceProcessed(c.getLastSequenceProcessed() + num_entries_retrieved)
     consumer.saveOrUpdate(c)
     if num_entries_retrieved != attempt_num_entries:
-        time.sleep(20)
+        time.sleep(10)
 
 
