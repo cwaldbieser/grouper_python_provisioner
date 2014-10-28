@@ -5,6 +5,7 @@ from ConfigParser import SafeConfigParser
 from  cStringIO import StringIO
 import contextlib
 import hmac
+from json import load
 import os
 import os.path
 import pprint
@@ -46,6 +47,7 @@ def load_config(config_file=None):
         port = 9600
         hmac_key = 
         sqlite_db = groups.db
+        group_map = groupmap.json
         
         [LDAP]
         url =
@@ -101,6 +103,13 @@ def init_db(db_str):
                 if not str(ex).endswith(" already exists"):
                     raise
         
+def load_group_map(gm):
+    """
+    """
+    with open(gm, "r") as f:
+        o = load(f)
+    return o
+        
 class GroupReceiverService(Service):
     """
     """
@@ -126,6 +135,7 @@ class GroupReceiverService(Service):
         hmac_key = scp.get("APPLICATION", "hmac_key")
         assert hmac_key is not None, "HMAC key has not been set."
         assert hmac_key.strip() != "", "HMAC key has not been set."
+        group_map = load_group_map(scp.get("APPLICATION", "group_map"))
         
         conn = serverFromString(self._reactor, "tcp:%d" % port)
         factory = GroupReceiverFactory()
@@ -134,7 +144,7 @@ class GroupReceiverService(Service):
         factory.hmac_key = hmac_key
         self._d = conn.listen(factory) 
         self._d.addCallback(self.set_listening_port)
-        processor = LoopingCall(process_requests, db_str, ldap_info)
+        processor = LoopingCall(process_requests, db_str, ldap_info, group_map)
         processor.start(10)
         
     def set_listening_port(self, port):
@@ -298,25 +308,23 @@ def add_action_to_batch(group, action, member, db_str):
 #=======================================================================
 # Process stored requests.
 #=======================================================================
-def process_requests(db_str, ldap_info):
+def process_requests(db_str, ldap_info, group_map):
     """
     """
-    return threads.deferToThread(blocking_process_requests, db_str, ldap_info)
+    return threads.deferToThread(blocking_process_requests, db_str, ldap_info, group_map)
     
-def group_to_ldap_group(g):
+def group_to_ldap_group(g, group_map):
     """
     """
-    parts = g.split(":")
-    group = parts[-1]
-    if group in ['vpn', 'orkz']:
-        return group.lower()
-    else:
-        return None
+    result = group_map.get(g, None)
+    if result is not None:
+        result = result.lower()
+    return result
     
 ########################################################################
 # Blocking functions
 ########################################################################
-def blocking_process_requests(db_str, ldap_info):
+def blocking_process_requests(db_str, ldap_info, group_map):
     """
     """
     ldap.set_option(ldap.OPT_X_TLS_REQUIRE_CERT, ldap.OPT_X_TLS_ALLOW)
@@ -352,9 +360,9 @@ def blocking_process_requests(db_str, ldap_info):
                 """)
             c = db.cursor()
             c.execute(group_sql)
-            group_map = {}
+            mapped_groups = {}
             for groupid, group in list(fetch_batch(c)):
-                ldap_group = group_to_ldap_group(group)
+                ldap_group = group_to_ldap_group(group, group_map)
                 if ldap_group is None:
                     print "[DEBUG] Group '{group}' is not a target group.  Skipping ...".format(group=ldap_group)
                     c = db.cursor()
@@ -376,16 +384,16 @@ def blocking_process_requests(db_str, ldap_info):
                     print "- Deletes -"
                     print '\n  '.join(sorted(del_membs))
                     group_dn = apply_changes_to_ldap_group(ldap_group, add_membs, del_membs, base_dn, lconn)
-                    group_map[ldap_group] = group_dn
+                    mapped_groups[ldap_group] = group_dn
             c = db.cursor()
             c.execute(subj_sql)
             for subject_id in list(r[0] for r in fetch_batch(c)): 
                 c = db.cursor()
                 c.execute(subj_add_sql, [subject_id])
-                add_membs = set(group_map[group_to_ldap_group(r[0])] for r in fetch_batch(c))
+                add_membs = set(mapped_groups[group_to_ldap_group(r[0], group_map)] for r in fetch_batch(c))
                 c = db.cursor()
                 c.execute(subj_del_sql, [subject_id])
-                del_membs = set(group_map[group_to_ldap_group(r[0])] for r in fetch_batch(c))
+                del_membs = set(mapped_groups[group_to_ldap_group(r[0], group_map)] for r in fetch_batch(c))
                 if len(add_membs) > 0 or len(del_membs) > 0:
                     print "[DEBUG] Applying changes to subject {subject} ...".format(subject=subject_id)
                     print "- Adds -"
