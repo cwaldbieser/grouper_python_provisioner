@@ -5,4 +5,5 @@ THISDIR=$(dirname "$SCRIPT")
 PYENV="$THISDIR/pyenv"
 
 . "$PYENV/bin/activate"
-exec python "$THISDIR/txgroupserver.py" "$@"
+twistd -y "$THISDIR/txgroupserver.py"
+
