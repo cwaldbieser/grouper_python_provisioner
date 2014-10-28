@@ -1,8 +1,12 @@
 #! /usr/bin/env python
 
 # Standard library
+from ConfigParser import SafeConfigParser
+from  cStringIO import StringIO
 import contextlib
 import hmac
+import os
+import os.path
 import pprint
 import sqlite3
 from textwrap import dedent
@@ -14,6 +18,8 @@ import ldap.dn
 import ldap.modlist
 from ldap.filter import escape_filter_chars as escape_fltr
 # - Twisted
+from twisted.application import service
+from twisted.application.service import Service
 from twisted.internet import reactor, threads
 from twisted.internet.endpoints import serverFromString
 from twisted.internet.protocol import Protocol, connectionDone
@@ -22,13 +28,135 @@ from twisted.internet.task import LoopingCall
 from twisted.protocols.basic import LineReceiver
 
 #=======================================================================
+#=======================================================================
+def load_config(config_file=None):
+    """
+    """
+    if config_file is None:
+        basefile="txgroupserver.cfg"
+        syspath = os.path.join("/etc/grouper", basefile)
+        homepath = os.path.expanduser("~/.{0}".format(basefile))
+        apppath = os.path.join(os.path.dirname(__file__), basefile)
+        curpath = os.path.join(os.curdir, basefile)
+        files = [syspath, homepath, apppath, curpath]
+    else:
+        files = [config_file]
+    defaults = dedent("""\
+        [APPLICATION]
+        port = 9600
+        hmac_key = 
+        sqlite_db = groups.db
+        
+        [LDAP]
+        url =
+        start_tls = 1
+        bind_dn =
+        passwd = 
+        base_dn =
+        """)
+    buf = StringIO(defaults)
+    scp = SafeConfigParser()
+    scp.readfp(buf)
+    scp.read(files)
+    return scp
+    
+def section2dict(scp, section):
+    """
+    """
+    d = {}
+    for option in scp.options(section):
+        d[option] = scp.get(section, option)
+    return d
+        
+def init_db(db_str):
+    """
+    """
+    with sqlite3.connect(db_str) as db:
+        commands = []
+        sql = dedent("""\
+            CREATE TABLE groups(
+                grp TEXT NOT NULL
+            );
+            """)
+        commands.append(sql)
+        sql = dedent("""\
+            CREATE TABLE member_ops(
+                member TEXT NOT NULL,
+                op TEXT NOT NULL,
+                grp INTEGER NOT NULL
+            );
+            """)
+        commands.append(sql)
+        sql = """CREATE UNIQUE INDEX ix0 ON groups (grp);"""
+        commands.append(sql)
+        sql = """CREATE UNIQUE INDEX ix1 ON member_ops (member, grp);"""
+        commands.append(sql)
+        for sql in commands:
+            print "sql", sql
+            try:
+                c = db.cursor()
+                c.execute(sql)
+                db.commit()
+            except sqlite3.OperationalError as ex:
+                if not str(ex).endswith(" already exists"):
+                    raise
+        
+class GroupReceiverService(Service):
+    """
+    """
+    def __init__(self, a_reactor=None):
+        """
+        Initialize the service.
+        
+        :param a_reactor: Override the reactor to use.
+        """
+        if a_reactor is None:
+            a_reactor = reactor
+        self._reactor = a_reactor
+        self._port = None
+        
+    def startService(self):
+        """
+        Start the service.
+        """
+        scp = load_config()
+        ldap_info = section2dict(scp, 'LDAP')
+        db_str = scp.get("APPLICATION", "sqlite_db")
+        port = scp.getint("APPLICATION", "port")
+        hmac_key = scp.get("APPLICATION", "hmac_key")
+        assert hmac_key is not None, "HMAC key has not been set."
+        assert hmac_key.strip() != "", "HMAC key has not been set."
+        
+        conn = serverFromString(self._reactor, "tcp:%d" % port)
+        factory = GroupReceiverFactory()
+        factory.db_str = db_str
+        init_db(db_str)
+        factory.hmac_key = hmac_key
+        self._d = conn.listen(factory) 
+        self._d.addCallback(self.set_listening_port)
+        processor = LoopingCall(process_requests, db_str, ldap_info)
+        processor.start(10)
+        
+    def set_listening_port(self, port):
+        """
+        """
+        self._port = port
+        
+    def stopService(self):
+        """
+        Stop the service.
+        """
+        if self._port is not None:
+            return self._port.stopListening()
+
+
+#=======================================================================
 # Protocol
 #=======================================================================
 class GroupReceiver(LineReceiver):
     
     max_members = 10000
     actions = ('addMembership', 'deleteMembership')
-    hmac_key = 'HMAC key goes here.'
     
     def connectionMade(self):
         LineReceiver.connectionMade(self)
@@ -69,7 +197,7 @@ class GroupReceiver(LineReceiver):
             self.subject = parts[1]
         elif parts[0] == 'hmac':
             presented_digest = parts[1]
-            h = hmac.new(self.hmac_key)
+            h = hmac.new(self.factory.hmac_key)
             h.update(self.group)
             h.update(self.action)
             h.update(self.subject)
@@ -381,22 +509,16 @@ def get_group_id(group, db):
 def main():
     """
     """
-    ldap_info = {
-        'url': 'ldap://ldap-dev2.dev.lafayette.edu',
-        'start_tls': True,
-        'bind_dn': 'cn=manager,o=lafayette',
-        'passwd': 'bullsh0t',
-        'base_dn': 'o=lafayette'}
-    db_str = "groups.db"
-    
-    conn = serverFromString(reactor, "tcp:9600")
-    factory = GroupReceiverFactory()
-    factory.db_str = db_str
-    conn.listen(factory) 
-    processor = LoopingCall(process_requests, db_str, ldap_info)
-    processor.start(10)
+    service = GroupReceiverService()
+    service.startService()
     reactor.run()
 
 if __name__ == "__main__":
     main()
-
+else:
+    application = service.Application("Twisted Group Server")
+    service = GroupReceiverService()
+    service.setServiceParent(application)
+    
+    
+    

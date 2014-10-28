@@ -115,6 +115,7 @@ def load_config(config_name):
         files = scp.read([
             "/etc/grouper/process_changelog.cfg", 
             os.path.expanduser("~/.process_changelog.cfg"),
+            os.path.join(os.path.dirname(__file__), "process_changelog.cfg"),
             os.path.join(os.path.abspath(os.curdir), "process_changelog.cfg")])
     info("Read configuration from: %s" % (', '.join(files)))
     return scp
