@@ -1,7 +1,7 @@
-#! /bin/bash
+#! /bin/sh
 
-SCRIPT=$(readlink -f "$0")
-THISDIR=$(dirname "$SCRIPT")
+THISDIR="$( cd $(dirname $0); pwd)"
+SCRIPT="$THISDIR/$(basename $0)"
 PIDFILE="$THISDIR/twistd.pid"
 
 if [ -f "$PIDFILE" ]; then

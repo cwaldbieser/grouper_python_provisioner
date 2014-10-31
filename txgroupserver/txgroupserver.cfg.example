@@ -1,0 +1,12 @@
+[APPLICATION]
+port = 9600
+hmac_key = secret_key_very_long_and_random
+sqlite_db = /opt/txgroupserver/groups.db
+group_map = /opt/txgroupserver/groupmap.json
+
+[LDAP]
+url = ldap://ldap.example.net/
+start_tls = True
+bind_dn = cn=manager,o=lafayette
+passwd = secret_password
+base_dn = dc=example,dc=edu

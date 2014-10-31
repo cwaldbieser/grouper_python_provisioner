@@ -1,0 +1,4 @@
+[APPLICATION]
+hmac_key=long_and_random_secret_key
+port=9600
+changefile=last_change_id.txt
