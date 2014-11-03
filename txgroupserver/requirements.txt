@@ -1,0 +1,4 @@
+Twisted==14.0.2
+argparse==1.2.1
+python-ldap==2.4.18
+zope.interface==4.1.1
