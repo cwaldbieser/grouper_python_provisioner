@@ -8,7 +8,6 @@ import hmac
 from json import load
 import os
 import os.path
-import pprint
 import sqlite3
 from textwrap import dedent
 
@@ -27,6 +26,7 @@ from twisted.internet.protocol import Protocol, connectionDone
 from twisted.internet.protocol import Factory
 from twisted.internet.task import LoopingCall
 from twisted.protocols.basic import LineReceiver
+from twisted.python import log
 
 #=======================================================================
 #=======================================================================
@@ -94,7 +94,6 @@ def init_db(db_str):
         sql = """CREATE UNIQUE INDEX ix1 ON member_ops (member, grp);"""
         commands.append(sql)
         for sql in commands:
-            print "sql", sql
             try:
                 c = db.cursor()
                 c.execute(sql)
@@ -218,11 +217,9 @@ class GroupReceiver(LineReceiver):
                 hcmp = self.compare_digests
                 
             if hcmp(presented_digest, computed_digest):
-                #print "[DEBUG] Creating deferred to record ..."
                 self.deferred = record_group_action(self.group, self.action, self.subject, self.factory.db_str)
                 self.deferred.addCallback(self.message_stored)
                 self.deferred.addErrback(self.message_not_stored)
-                #print "[DEBUG] Deferred created."
                 return
             else:
                 self.sendLine("Invalid HMAC.")
@@ -311,7 +308,10 @@ def add_action_to_batch(group, action, member, db_str):
 def process_requests(db_str, ldap_info, group_map):
     """
     """
-    return threads.deferToThread(blocking_process_requests, db_str, ldap_info, group_map)
+    d = threads.deferToThread(blocking_process_requests, db_str, ldap_info, group_map)
+    #If there is an error, log it, but keep on looping.
+    d.addErrback(log.err)
+    return d
     
 def group_to_ldap_group(g, group_map):
     """
@@ -364,7 +364,7 @@ def blocking_process_requests(db_str, ldap_info, group_map):
             for groupid, group in list(fetch_batch(c)):
                 ldap_group = group_to_ldap_group(group, group_map)
                 if ldap_group is None:
-                    print "[DEBUG] Group '{group}' is not a target group.  Skipping ...".format(group=ldap_group)
+                    #print "[DEBUG] Group '{group}' is not a target group.  Skipping ...".format(group=ldap_group)
                     c = db.cursor()
                     c.execute("""DELETE FROM member_ops WHERE grp = ?;""", [groupid])
                     c = db.cursor()
@@ -378,11 +378,11 @@ def blocking_process_requests(db_str, ldap_info, group_map):
                 c.execute(memb_del_sql, [groupid])
                 del_membs = set([r[0] for r in list(fetch_batch(c))])
                 if len(add_membs) > 0 or len(del_membs) > 0:
-                    print "[DEBUG] Applying changes to group {group} ...".format(group=ldap_group)
-                    print "- Adds -"
-                    print '\n  '.join(sorted(add_membs))
-                    print "- Deletes -"
-                    print '\n  '.join(sorted(del_membs))
+                    #print "[DEBUG] Applying changes to group {group} ...".format(group=ldap_group)
+                    #print "- Adds -"
+                    #print '\n  '.join(sorted(add_membs))
+                    #print "- Deletes -"
+                    #print '\n  '.join(sorted(del_membs))
                     group_dn = apply_changes_to_ldap_group(ldap_group, add_membs, del_membs, base_dn, lconn)
                     mapped_groups[ldap_group] = group_dn
             c = db.cursor()
@@ -395,11 +395,11 @@ def blocking_process_requests(db_str, ldap_info, group_map):
                 c.execute(subj_del_sql, [subject_id])
                 del_membs = set(mapped_groups[group_to_ldap_group(r[0], group_map)] for r in fetch_batch(c))
                 if len(add_membs) > 0 or len(del_membs) > 0:
-                    print "[DEBUG] Applying changes to subject {subject} ...".format(subject=subject_id)
-                    print "- Adds -"
-                    print '\n  '.join(sorted(add_membs))
-                    print "- Deletes -"
-                    print '\n  '.join(sorted(del_membs))
+                    #print "[DEBUG] Applying changes to subject {subject} ...".format(subject=subject_id)
+                    #print "- Adds -"
+                    #print '\n  '.join(sorted(add_membs))
+                    #print "- Deletes -"
+                    #print '\n  '.join(sorted(del_membs))
                     
                     apply_changes_to_ldap_subj(subject_id, add_membs, del_membs, base_dn, lconn)
                 
@@ -495,8 +495,6 @@ def get_group_id(group, db):
     """
     sql = """SELECT rowid FROM groups WHERE grp = ?;"""
     c = db.cursor()
-    print "sql:", sql
-    print "group", group
     c.execute(sql, [group])
     result = c.fetchone()
     if result is None:
