@@ -4,6 +4,7 @@
 from ConfigParser import SafeConfigParser
 from  cStringIO import StringIO
 import contextlib
+import datetime
 import hmac
 from json import load
 import os
@@ -141,9 +142,10 @@ class GroupReceiverService(Service):
         factory.db_str = db_str
         init_db(db_str)
         factory.hmac_key = hmac_key
+        factory.last_update = None
         self._d = conn.listen(factory) 
         self._d.addCallback(self.set_listening_port)
-        processor = LoopingCall(process_requests, db_str, ldap_info, group_map)
+        processor = LoopingCall(process_requests, db_str, ldap_info, group_map, factory)
         processor.start(10)
         
     def set_listening_port(self, port):
@@ -174,8 +176,9 @@ class GroupReceiver(LineReceiver):
         self.subject = None
 
     def lineReceived(self, line):
-        #print "[DEBUG] Line received: %s" % line
+        #log.msg("[DEBUG] Line received: %s" % line)
         parts = line.split(':', 1)
+        #log.msg("[DEBUG] parts: %s" % str(parts))
         if len(parts) != 2:
             self.sendLine("Command missing argument.")
             self.transport.loseConnection()
@@ -183,7 +186,16 @@ class GroupReceiver(LineReceiver):
             
         if self.group is None:
             if parts[0] != 'group':
-                self.sendLine("Expected 'group'.")
+                if parts[0] == 'status':
+                    factory = self.factory
+                    last_update = factory.last_update
+                    if last_update is None:
+                        value = "never"
+                    else:
+                        value = last_update.strftime("%Y-%m-%dT%H:%M:%S")
+                    self.sendLine(value)
+                else:
+                    self.sendLine("Expected 'group'.")
                 self.transport.loseConnection()
                 return
             self.group = parts[1]
@@ -305,10 +317,18 @@ def add_action_to_batch(group, action, member, db_str):
 #=======================================================================
 # Process stored requests.
 #=======================================================================
-def process_requests(db_str, ldap_info, group_map):
+def process_requests(db_str, ldap_info, group_map, factory):
     """
     """
+    def set_last_update(result, factory):
+        """
+        Set the last-updated time on the factory.
+        """
+        factory.last_update = datetime.datetime.today()
+        return result
+        
     d = threads.deferToThread(blocking_process_requests, db_str, ldap_info, group_map)
+    d.addCallback(set_last_update, factory)
     #If there is an error, log it, but keep on looping.
     d.addErrback(log.err)
     return d
