@@ -170,6 +170,7 @@ def main(args):
         for n, entry in enumerate(l):
             action_name =  entry.getChangeLogType().getActionName()
             if action_name != u'addMembership' and action_name != u'deleteMembership':
+                time.sleep(1)
                 continue
                 
             subject_id = entry.retrieveValueForLabel(ChangeLogLabels.MEMBERSHIP_ADD.subjectId)

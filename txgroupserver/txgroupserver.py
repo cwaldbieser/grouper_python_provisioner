@@ -77,6 +77,14 @@ def init_db(db_str):
     with sqlite3.connect(db_str) as db:
         commands = []
         sql = dedent("""\
+            CREATE TABLE intake(
+                grp TEXT NOT NULL,
+                member TEXT NOT NULL,
+                op TEXT NOT NULL
+            );
+            """)
+        commands.append(sql)
+        sql = dedent("""\
             CREATE TABLE groups(
                 grp TEXT NOT NULL
             );
@@ -281,38 +289,26 @@ class GroupReceiverFactory(Factory):
 def record_group_action(group, action, subject, db_str):
     """
     """
-    d = threads.deferToThread(add_action_to_batch, group, action, subject, db_str)
+    d = threads.deferToThread(add_action_to_intake, group, action, subject, db_str)
     return d
     
 
-def add_action_to_batch(group, action, member, db_str):
+def add_action_to_intake(group, action, member, db_str):
     """
+    !!! Blocking API !!!
+    Adds a member add/delete to the intake table.
+    SQLite3 guaruntees the ROWID of the table will be monotomically increasing
+    as long as the max ROWID value is not hit and as long as the max value in the 
+    table is never deleted.  If the table is empty, a ROWID of 1 is used.
+    See: https://www.sqlite.org/autoinc.html
     """
-    #print "[DEBUG] Batching action ..."
     with sqlite3.connect(db_str) as db:
-        groupid = get_group_id(group, db)
         sql = dedent("""\
-            SELECT op, member
-            FROM member_ops 
-            WHERE grp = ?
-            AND member = ?
-            ;
+            INSERT INTO intake(grp, member, op) VALUES(?, ?, ?);
             """)
         c = db.cursor()
-        c.execute(sql, [groupid, member])
-        result = c.fetchone()
-        if result is None:
-            sql = """INSERT INTO member_ops(op, member, grp) VALUES(?, ?, ?);"""
-            c = db.cursor()
-            c.execute(sql, [action, member, groupid])
-            db.commit()
-        else:
-            sql = """UPDATE member_ops SET op = ? WHERE grp=? AND member=?;"""
-            c = db.cursor()
-            c.execute(sql, [action, groupid, member])
-            db.commit()
-            
-    #print "[DEBUG] Action has been batched."
+        c.execute(sql, [group, member, action])
+        db.commit()
 
 #=======================================================================
 # Process stored requests.
@@ -349,6 +345,9 @@ def blocking_process_requests(db_str, ldap_info, group_map):
     """
     ldap.set_option(ldap.OPT_X_TLS_REQUIRE_CERT, ldap.OPT_X_TLS_ALLOW)
     with sqlite3.connect(db_str) as db:
+        # Transfer intake table to normalized batch tables.
+        transfer_intake_to_batch(db)
+        # Process the normalized batch.
         base_dn = ldap_info['base_dn']
         with connect_to_directory(ldap_info['url']) as lconn:
             lconn.start_tls_s()
@@ -430,6 +429,53 @@ def blocking_process_requests(db_str, ldap_info, group_map):
             c = db.cursor()
             c.execute(sql)
             db.commit()
+            
+def transfer_intake_to_batch(db):
+    """
+    Transfer the intake table to the batch tables.
+    This algorithm depends on the behavior of the SQLite3 ROWID-- specifically
+    its properties relating to monotomically increasing values, and its reset
+    to 1 if the table is empty.
+    
+    Ref: https://www.sqlite.org/autoinc.html
+    """
+    sql = dedent("""\
+        SELECT rowid, grp, member, op
+        FROM intake
+        ORDER BY rowid ASC
+        ;
+        """)
+    c = db.cursor()
+    c.execute(sql)
+    intake = list(fetch_batch(c))
+    del c
+    for rowid, group, member, action in intake:
+        groupid = get_group_id(group, db)
+        sql = dedent("""\
+            SELECT op, member
+            FROM member_ops 
+            WHERE grp = ?
+            AND member = ?
+            ;
+            """)
+        c = db.cursor()
+        c.execute(sql, [groupid, member])
+        result = c.fetchone()
+        if result is None:
+            sql = """INSERT INTO member_ops(op, member, grp) VALUES(?, ?, ?);"""
+            c = db.cursor()
+            c.execute(sql, [action, member, groupid])
+        else:
+            sql = """UPDATE member_ops SET op = ? WHERE grp=? AND member=?;"""
+            c = db.cursor()
+            c.execute(sql, [action, groupid, member])
+        sql = """DELETE FROM intake WHERE rowid = ? ;"""
+        c = db.cursor()
+        c.execute(sql, [rowid])
+        db.commit()
+            
+    #print "[DEBUG] Action has been batched."
+
       
 def fetch_batch(cursor, batch_size=None, **kwds):
     """
