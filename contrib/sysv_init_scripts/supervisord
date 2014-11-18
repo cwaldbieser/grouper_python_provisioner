@@ -6,7 +6,7 @@
 # Get function from functions library
 . /etc/init.d/functions
 
-APPDIR=/opt/internet2/grouper/changelogger/supervisor
+APPDIR=/opt/supervisord
 PIDFILE=/tmp/supervisord.pid
 START_SCRIPT="$APPDIR/start.sh"
 STOP_SCRIPT="$APPDIR/stop.sh"
