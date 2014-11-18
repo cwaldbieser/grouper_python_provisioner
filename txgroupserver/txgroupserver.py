@@ -204,23 +204,27 @@ class GroupReceiver(LineReceiver):
                     self.sendLine(value)
                 else:
                     self.sendLine("Expected 'group'.")
+                    log.msg("[WARN] Expected 'group'.  Line was: '%s'" % line)
                 self.transport.loseConnection()
                 return
             self.group = parts[1]
         elif self.action is None:
             if parts[0] != "action":
                 self.sendLine("Expected 'action'.")
+                log.msg("[WARN] Expected 'action'.  Line was: '%s'" % line)
                 self.transport.loseConnection()
                 return
             action = parts[1]
             if action not in self.actions:
                 self.sendLine("Action must be one of: %s" % str(', '.join(self.actions)))
+                log.msg("[WARN] Invalid action.  Line was: '%s'" % line)
                 self.transport.loseConnection()
                 return
             self.action = action
         elif self.subject is None:
             if parts[0] != 'subject':
                 self.sendLine("Expected 'subject'.")
+                log.msg("[WARN] Expected 'subject'.  Line was: '%s'" % line)
                 self.transport.loseConnection()
                 return
             self.subject = parts[1]
@@ -243,10 +247,12 @@ class GroupReceiver(LineReceiver):
                 return
             else:
                 self.sendLine("Invalid HMAC.")
+                log.msg("[WARN] Invalid HMAC.  Line was: '%s'" % line)
                 self.transport.loseConnection()
                 return
         else:
             self.sendLine("Expected 'hmac'.")
+            log.msg("[WARN] Expected 'hmac'.  Line was: '%s'" % line)
             self.transport.loseConnection()
             return
             
