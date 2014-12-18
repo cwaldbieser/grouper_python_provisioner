@@ -560,7 +560,7 @@ def load_subject_memberships(dn, conn):
     """
     results = conn.search_s(dn, ldap.SCOPE_BASE, attrlist=['memberOf']) 
     result = results[0]
-    return result[1]['memberOf']
+    return result[1].get('memberOf', [])
     
 def get_group_id(group, db):
     """
