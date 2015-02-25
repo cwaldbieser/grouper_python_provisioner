@@ -11,20 +11,21 @@ if [ -f "$PIDFILE" ]; then
         retval=$?
     fi
 fi
-if [ "$retval" -ne 0 ]; then
-    exit 1
-fi
+retval0="$retval"
 
 PIDFILE="$THISDIR/status.pid"
 if [ -f "$PIDFILE" ]; then
     pid=$(cat "$PIDFILE")
     if [ ! -z "$pid" ]; then
         kill -HUP "$pid"
-        retval=$?
+        retval1=$?
     fi
 fi
-if [ "$retval" -ne 0 ]; then
+if [ "$retval0" -ne 0 ]; then
+    exit 1
+fi
+if [ "$retval1" -ne 0 ]; then
     exit 1
 fi
 
-exit "$retval"
+exit 0
