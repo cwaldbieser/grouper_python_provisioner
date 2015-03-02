@@ -517,7 +517,11 @@ def apply_changes_to_ldap_group(group, adds, deletes, base_dn, conn):
     members.sort()
     new_attribs = dict(member=members)
     ml = ldap.modlist.modifyModlist(attribs, new_attribs)
-    conn.modify_s(group_dn, ml)
+    try:
+        conn.modify_s(group_dn, ml)
+    except ldap.LDAPError as ex:
+        log.msg("[ERROR] Error while attempting to modify LDAP group: {0}".format(group_dn)) 
+        raise
     return group_dn.lower()
     
 def apply_changes_to_ldap_subj(subject_id, fq_adds, fq_deletes, base_dn, conn):
@@ -536,14 +540,22 @@ def apply_changes_to_ldap_subj(subject_id, fq_adds, fq_deletes, base_dn, conn):
     attribs = dict(memberOf=membs)
     new_attribs = dict(memberOf=members)
     ml = ldap.modlist.modifyModlist(attribs, new_attribs)
-    conn.modify_s(subj_dn, ml)
+    try:
+        conn.modify_s(subj_dn, ml)
+    except ldap.LDAPError as ex:
+        log.msg("[ERROR] Error while attempting to modify LDAP subject: {0}".format(subj_dn)) 
+        raise
     
 def load_subject_dns(subject_ids, base_dn, conn):
     """
     """
     for subject_id in subject_ids:
         fltr = "cn={0}".format(escape_fltr(subject_id))
-        results = conn.search_s(base_dn, ldap.SCOPE_SUBTREE, fltr, attrlist=['cn']) 
+        try:
+            results = conn.search_s(base_dn, ldap.SCOPE_SUBTREE, fltr, attrlist=['cn']) 
+        except ldap.LDAPError as ex:
+            log.msg("[ERROR] Error while searching for LDAP subject: {0}".format(subject_id)) 
+            raise
         for result in results:
             yield (subject_id, result[0].lower())
 
@@ -551,14 +563,22 @@ def lookup_group(group_name, base_dn, conn):
     """
     """
     fltr = "cn={0}".format(escape_fltr(group_name))
-    results = conn.search_s(base_dn, ldap.SCOPE_SUBTREE, fltr, attrlist=['member']) 
+    try:
+        results = conn.search_s(base_dn, ldap.SCOPE_SUBTREE, fltr, attrlist=['member']) 
+    except ldap.LDAPError as ex:
+        log.msg("[ERROR] Error while searching for LDAP group: {0}".format(group_name)) 
+        raise
     assert len(results) > 0, "Could not find group, '{0}'.".format(group_name)
     return results[0]
 
 def load_subject_memberships(dn, conn):
     """
     """
-    results = conn.search_s(dn, ldap.SCOPE_BASE, attrlist=['memberOf']) 
+    try:
+        results = conn.search_s(dn, ldap.SCOPE_BASE, attrlist=['memberOf']) 
+    except ldap.LDAPError as ex:
+        log.msg("[ERROR] Error while fetching memberships for LDAP subject: {0}".format(dn)) 
+        raise
     result = results[0]
     return result[1].get('memberOf', [])
     
