@@ -528,7 +528,9 @@ def apply_changes_to_ldap_subj(subject_id, fq_adds, fq_deletes, base_dn, conn):
     """
     """
     subj_dns = list(load_subject_dns([subject_id], base_dn, conn))
-    assert not len(subj_dns) == 0, "No DN found for subject ID '{0}'".format(subject_id)
+    if len(subj_dns) == 0:
+        log.msg("[WARN] No DN found for subject ID '{0}.  Skipping ...'".format(subject_id))
+        return
     assert not len(subj_dns) > 1, "Multiple DNs found for subject ID '{0}'".format(subject_id)
     subj_dn = subj_dns[0][1]
     membs = load_subject_memberships(subj_dn, conn)
