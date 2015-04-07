@@ -408,7 +408,7 @@ def blocking_process_requests(db_str, ldap_info, group_map):
                     #print '\n  '.join(sorted(add_membs))
                     #print "- Deletes -"
                     #print '\n  '.join(sorted(del_membs))
-                    group_dn = apply_changes_to_ldap_group(ldap_group, add_membs, del_membs, base_dn, lconn)
+                    group_dn = apply_changes_to_ldap_group(ldap_group, add_membs, del_membs, base_dn, lconn, ldap_info)
                     mapped_groups[ldap_group] = group_dn
             c = db.cursor()
             c.execute(subj_sql)
@@ -504,15 +504,19 @@ def connect_to_directory(url):
     yield conn
     conn.unbind()
             
-def apply_changes_to_ldap_group(group, adds, deletes, base_dn, conn):
-    """
-    """
+def apply_changes_to_ldap_group(group, adds, deletes, base_dn, conn, ldap_info):
+    empty_dn = ldap_info.get("empty_dn", None)
     fq_adds = set(x[1] for x in load_subject_dns(adds, base_dn, conn))
     fq_deletes = set(x[1] for x in load_subject_dns(deletes, base_dn, conn))
     group_dn, attribs = lookup_group(group, base_dn, conn) 
     memb_set = set([m.lower() for m in attribs['member']])
     memb_set = memb_set.union(fq_adds)
     memb_set = memb_set - fq_deletes
+    if empty_dn is not None:
+        if len(memb_set) == 0:
+            memb_set.add(empty_dn)
+        if len(memb_set) > 1 and empty_dn in memb_set:
+            memb_set.remove(empty_dn)
     members = list(memb_set)
     members.sort()
     new_attribs = dict(member=members)
