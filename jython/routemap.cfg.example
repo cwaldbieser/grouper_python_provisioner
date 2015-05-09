@@ -1,0 +1,5 @@
+
+test:nobz = testldap.nobz
+test:krewz:* = testldap.${group}.${subject}
+_default = dev.null
+
