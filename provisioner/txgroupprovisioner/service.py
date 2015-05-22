@@ -1,6 +1,7 @@
 #! /usr/bin/env python
 
 # Standard library
+from __future__ import print_function
 from ConfigParser import SafeConfigParser
 from  cStringIO import StringIO
 import contextlib
@@ -21,21 +22,22 @@ from ldap.filter import escape_filter_chars as escape_fltr
 # - Twisted
 from twisted.application import service
 from twisted.application.service import Service
-from twisted.internet import reactor, threads
+from twisted.internet import reactor, task, threads
+from twisted.internet.defer import inlineCallbacks
 from twisted.internet.endpoints import serverFromString
-from twisted.internet.protocol import Protocol, connectionDone
-from twisted.internet.protocol import Factory
+from twisted.internet.protocol import ClientCreator, Factory, Protocol, connectionDone
 from twisted.internet.task import LoopingCall
 from twisted.protocols.basic import LineReceiver
-from twisted.python import log
+from twisted.logger import Logger
+from txamqp.client import TwistedDelegate
+from txamqp.protocol import AMQClient
+import txamqp.spec
+# - application
+from logging import make_syslog_observer
 
-#=======================================================================
-#=======================================================================
 def load_config(config_file=None):
-    """
-    """
     if config_file is None:
-        basefile="txgroupserver.cfg"
+        basefile="txgroupprovisioner.cfg"
         syspath = os.path.join("/etc/grouper", basefile)
         homepath = os.path.expanduser("~/.{0}".format(basefile))
         apppath = os.path.join(os.path.dirname(__file__), basefile)
@@ -43,20 +45,29 @@ def load_config(config_file=None):
         files = [syspath, homepath, apppath, curpath]
     else:
         files = [config_file]
+    spec_dir = os.path.join(os.path.split(os.path.split(__file__)[0])[0], "spec")
+    spec_path = os.path.join(spec_dir, "amqp0-9-1.stripped.xml")
     defaults = dedent("""\
         [APPLICATION]
-        port = 9600
-        hmac_key = 
+        log_level = DEBUG
         sqlite_db = groups.db
         group_map = groupmap.json
         
         [LDAP]
-        url =
+        log_level = WARN
+        url = ldap://127.0.0.1:389/
         start_tls = 1
-        bind_dn =
-        passwd = 
-        base_dn =
-        """)
+
+        [AMQP]
+        log_level = INFO
+        host = localhost
+        port = 5672
+        exchange = grouper_exchange
+        vhost = /
+        spec = {spec_path}
+        user = guest
+        passwd = guest
+        """.format(spec_path=spec_path))
     buf = StringIO(defaults)
     scp = SafeConfigParser()
     scp.readfp(buf)
@@ -64,16 +75,12 @@ def load_config(config_file=None):
     return scp
     
 def section2dict(scp, section):
-    """
-    """
     d = {}
     for option in scp.options(section):
         d[option] = scp.get(section, option)
     return d
         
 def init_db(db_str):
-    """
-    """
     with sqlite3.connect(db_str) as db:
         commands = []
         sql = dedent("""\
@@ -112,16 +119,27 @@ def init_db(db_str):
                     raise
         
 def load_group_map(gm):
-    """
-    """
     with open(gm, "r") as f:
         o = load(f)
     return o
         
-class GroupReceiverService(Service):
-    """
-    """
-    def __init__(self, a_reactor=None):
+
+class ServiceState(object):
+    db_str = None
+    last_update = None
+    amqp_info = None
+    read_from_queue = False
+
+class GroupProvisionerService(Service):
+    log = None
+
+    def __init__(
+            self, 
+            a_reactor=None, 
+            ws_endpoint_str=None, 
+            use_syslog=False, 
+            syslog_prefix=None,
+            logfile=None):
         """
         Initialize the service.
         
@@ -131,34 +149,131 @@ class GroupReceiverService(Service):
             a_reactor = reactor
         self._reactor = a_reactor
         self._port = None
+        self.service_state = ServiceState()
+        self.use_syslog = use_syslog
+        self.syslog_prefix = syslog_prefix
         
     def startService(self):
         """
         Start the service.
         """
         scp = load_config()
-        ldap_info = section2dict(scp, 'LDAP')
+        app_info = section2dict(scp, "APPLICATION")
+        log_level = app_info.get("log_level", "INFO")
+        self.log = Logger(
+            observer=make_syslog_observer(
+                log_level, 
+                prefix=self.syslog_prefix))
         db_str = scp.get("APPLICATION", "sqlite_db")
-        port = scp.getint("APPLICATION", "port")
-        hmac_key = scp.get("APPLICATION", "hmac_key")
-        assert hmac_key is not None, "HMAC key has not been set."
-        assert hmac_key.strip() != "", "HMAC key has not been set."
         group_map = load_group_map(scp.get("APPLICATION", "group_map"))
-        
-        conn = serverFromString(self._reactor, "tcp:%d" % port)
-        factory = GroupReceiverFactory()
-        factory.db_str = db_str
+        ldap_info = section2dict(scp, 'LDAP')
+        amqp_info = section2dict(scp, "AMQP")
+        amqp_log_level = amqp_info.get("log_level", log_level) 
+        self.amqp_log = Logger(
+            observer=make_syslog_observer(
+                amqp_log_level, 
+                prefix=self.syslog_prefix))
+        service_state = self.service_state 
+        service_state.db_str = db_str
         init_db(db_str)
-        factory.hmac_key = hmac_key
-        factory.last_update = None
-        self._d = conn.listen(factory) 
-        self._d.addCallback(self.set_listening_port)
-        processor = LoopingCall(process_requests, db_str, ldap_info, group_map, factory)
-        processor.start(10)
-        
+        service_state.amqp_info = amqp_info
+        service_state.last_update = None
+        self.start_amqp_client(amqp_info)
+        #processor = LoopingCall(process_requests, db_str, ldap_info, group_map, service_state)
+        #processor.start(10)
+
+    def start_amqp_client(self, amqp_info):
+        log = self.amqp_log
+        host = amqp_info['host']
+        port = int(amqp_info['port'])
+        exchange = amqp_info['exchange']
+        vhost = amqp_info['vhost']
+        spec_path = amqp_info['spec']
+        queue_name = amqp_info['queue']
+        route_file = amqp_info['route_map']
+        user = amqp_info['user']
+        passwd = amqp_info['passwd']
+        creds = (user, passwd)
+        bindings = self.parse_bindings(route_file)
+        queue_names = set([q for q, rk in bindings])
+        queue_names.add(queue_name)
+        log.debug(
+            "host='{host}', port={port}, exchange='{exchange}', vhost='{vhost}', user='{user}, spec={spec}'",
+            host=host, port=port, exchange=exchange, vhost=vhost, user=user, spec=spec_path)
+        for q in sorted(queue_names):
+            log.debug("Declared: queue='{queue}'", queue=q)
+        for q, rk in bindings:
+            log.debug("Binding: queue='{queue}', route_key='{route_key}'", queue=q, route_key=rk)
+        delegate = TwistedDelegate()
+        spec = txamqp.spec.load(spec_path)
+        d = ClientCreator(self._reactor, AMQClient, delegate=delegate, vhost=vhost, spec=spec).connectTCP(host, port)
+        d.addCallback(self.on_amqp_connect, exchange, queue_name, queue_names, bindings, creds)
+
+        def onError(err):
+            if reactor.running:
+                log.failure(err)
+                reactor.stop()
+
+        d.addErrback(onError)
+        self.service_state.read_from_queue = True
+
+    def parse_bindings(self, fname):
+        """
+        Queue map should be a JSON list of (queue_name, route_key) mappings.
+        """
+        with open(fname, "r") as f:
+            o = load(f)
+            return o
+
+    @inlineCallbacks
+    def on_amqp_connect(self, conn, exchange, queue_name, queue_names, bindings, creds):
+        log = self.amqp_log
+        service_state = self.service_state
+        db_str = service_state.db_str
+        log.info("Connected.")
+        user, passwd = creds
+        yield conn.authenticate(user, passwd)
+        log.info("Authenticated.")
+        channel = yield conn.channel(1)
+        yield channel.channel_open()
+        log.info("Channel opened.")
+        for name in queue_names:
+            yield channel.queue_declare(queue=name, durable=True)
+        log.info("Queues declared.")
+        yield channel.exchange_declare(exchange=exchange, type='topic')
+        log.info("Exchange declared.")
+        for qname, route_key in bindings:
+            yield channel.queue_bind(exchange=exchange, queue=qname, routing_key=route_key)
+        log.info("Routings have been mapped.")
+        yield channel.basic_consume(queue=queue_name, consumer_tag="mytag")
+        queue = yield conn.queue("mytag") 
+        delay = 0
+        reactor = self._reactor
+        while service_state.read_from_queue:
+            msg = yield queue.get()
+            log.debug('Received: "{msg}" from channel # {channel}.', msg=msg.content.body, channel=channel.id)
+            parts = msg.content.body.split("\n")
+            group = parts[0]
+            subject = parts[1]
+            action = parts[2]
+            try:
+                yield task.deferLater(reactor, delay, record_group_action, group, action, subject, db_str)
+            except Exception as ex:
+                log.error("Could not record message from queue.  Error was: {error}", error=ex)
+                delay = min(600, max(delay+20, delay*2))
+            else:
+                delay = 0    
+                yield channel.basic_ack(delivery_tag=msg.delivery_tag)
+                log.debug("Message from queue recorded.")
+        log.info("Closing AMQP channel ...")
+        yield channel.channel_close()
+        log.info("AMQP Channel closed.")
+        log.info("Closing AMQP connection ...")
+        yield conn.connection_close()
+        log.info("AMQP Connection closed.")
+
+
     def set_listening_port(self, port):
-        """
-        """
         self._port = port
         
     def stopService(self):
@@ -168,133 +283,10 @@ class GroupReceiverService(Service):
         if self._port is not None:
             return self._port.stopListening()
 
-
-#=======================================================================
-# Protocol
-#=======================================================================
-class GroupReceiver(LineReceiver):
-    
-    max_members = 10000
-    actions = ('addMembership', 'deleteMembership')
-    
-    def connectionMade(self):
-        LineReceiver.connectionMade(self)
-        self.group = None
-        self.action = None
-        self.subject = None
-
-    def lineReceived(self, line):
-        #log.msg("[DEBUG] Line received: %s" % line)
-        parts = line.split(':', 1)
-        #log.msg("[DEBUG] parts: %s" % str(parts))
-        if len(parts) != 2:
-            self.sendLine("Command missing argument.")
-            self.transport.loseConnection()
-            return
-            
-        if self.group is None:
-            if parts[0] != 'group':
-                if parts[0] == 'status':
-                    factory = self.factory
-                    last_update = factory.last_update
-                    if last_update is None:
-                        value = "never"
-                    else:
-                        value = last_update.strftime("%Y-%m-%dT%H:%M:%S")
-                    self.sendLine(value)
-                else:
-                    self.sendLine("Expected 'group'.")
-                    log.msg("[WARN] Expected 'group'.  Line was: '%s'" % line)
-                self.transport.loseConnection()
-                return
-            self.group = parts[1]
-        elif self.action is None:
-            if parts[0] != "action":
-                self.sendLine("Expected 'action'.")
-                log.msg("[WARN] Expected 'action'.  Line was: '%s'" % line)
-                self.transport.loseConnection()
-                return
-            action = parts[1]
-            if action not in self.actions:
-                self.sendLine("Action must be one of: %s" % str(', '.join(self.actions)))
-                log.msg("[WARN] Invalid action.  Line was: '%s'" % line)
-                self.transport.loseConnection()
-                return
-            self.action = action
-        elif self.subject is None:
-            if parts[0] != 'subject':
-                self.sendLine("Expected 'subject'.")
-                log.msg("[WARN] Expected 'subject'.  Line was: '%s'" % line)
-                self.transport.loseConnection()
-                return
-            self.subject = parts[1]
-        elif parts[0] == 'hmac':
-            presented_digest = parts[1]
-            h = hmac.new(self.factory.hmac_key)
-            h.update(self.group)
-            h.update(self.action)
-            h.update(self.subject)
-            computed_digest = h.hexdigest()
-            if hasattr(hmac, 'compare_digest'):
-                hcmp = hmac.compare_digest
-            else:
-                hcmp = self.compare_digests
-                
-            if hcmp(presented_digest, computed_digest):
-                self.deferred = record_group_action(self.group, self.action, self.subject, self.factory.db_str)
-                self.deferred.addCallback(self.message_stored)
-                self.deferred.addErrback(self.message_not_stored)
-                return
-            else:
-                self.sendLine("Invalid HMAC.")
-                log.msg("[WARN] Invalid HMAC.  Line was: '%s'" % line)
-                self.transport.loseConnection()
-                return
-        else:
-            self.sendLine("Expected 'hmac'.")
-            log.msg("[WARN] Expected 'hmac'.  Line was: '%s'" % line)
-            self.transport.loseConnection()
-            return
-            
-    def compare_digests(self, a, b):
-        """
-        """
-        asize = len(a)
-        bsize = len(b)
-        if asize < bsize:
-            a = a + ' '*(bsize-asize)
-        if bsize < asize:
-            b = b + ' '*(asize-bsize)
-        result = True
-        for achar, bchar in zip(a, b):
-            if achar != bchar:
-                result = False
-        return result
-        
-    def message_stored(self, result):
-        """
-        """
-        self.sendLine("OK")
-        self.transport.loseConnection()
-        
-    def message_not_stored(self, err):
-        """
-        """
-        self.sendLine("ERROR: " + str(err))
-        self.transport.loseConnection()
-
-#=======================================================================
-# Protocol factory
-#=======================================================================
-class GroupReceiverFactory(Factory):
-    protocol = GroupReceiver
-
 #=======================================================================
 # Record incoming requests.
 #=======================================================================
 def record_group_action(group, action, subject, db_str):
-    """
-    """
     d = threads.deferToThread(add_action_to_intake, group, action, subject, db_str)
     return d
     
@@ -319,18 +311,17 @@ def add_action_to_intake(group, action, member, db_str):
 #=======================================================================
 # Process stored requests.
 #=======================================================================
-def process_requests(db_str, ldap_info, group_map, factory):
-    """
-    """
-    def set_last_update(result, factory):
+def process_requests(db_str, ldap_info, group_map, service_state):
+
+    def set_last_update(result, service_state):
         """
-        Set the last-updated time on the factory.
+        Set the last-updated time on the service state.
         """
-        factory.last_update = datetime.datetime.today()
+        service_state.last_update = datetime.datetime.today()
         return result
         
     d = threads.deferToThread(blocking_process_requests, db_str, ldap_info, group_map)
-    d.addCallback(set_last_update, factory)
+    d.addCallback(set_last_update, service_state)
     #If there is an error, log it, but keep on looping.
     d.addErrback(log.err)
     return d
@@ -498,8 +489,6 @@ def fetch_batch(cursor, batch_size=None, **kwds):
       
 @contextlib.contextmanager
 def connect_to_directory(url):
-    """
-    """
     conn = ldap.initialize(url)
     yield conn
     conn.unbind()
@@ -553,8 +542,6 @@ def apply_changes_to_ldap_subj(subject_id, fq_adds, fq_deletes, base_dn, conn):
         raise
     
 def load_subject_dns(subject_ids, base_dn, conn):
-    """
-    """
     for subject_id in subject_ids:
         fltr = "cn={0}".format(escape_fltr(subject_id))
         try:
@@ -566,8 +553,6 @@ def load_subject_dns(subject_ids, base_dn, conn):
             yield (subject_id, result[0].lower())
 
 def lookup_group(group_name, base_dn, conn):
-    """
-    """
     fltr = "cn={0}".format(escape_fltr(group_name))
     try:
         results = conn.search_s(base_dn, ldap.SCOPE_SUBTREE, fltr, attrlist=['member']) 
@@ -578,8 +563,6 @@ def lookup_group(group_name, base_dn, conn):
     return results[0]
 
 def load_subject_memberships(dn, conn):
-    """
-    """
     try:
         results = conn.search_s(dn, ldap.SCOPE_BASE, attrlist=['memberOf']) 
     except ldap.LDAPError as ex:
@@ -589,8 +572,6 @@ def load_subject_memberships(dn, conn):
     return result[1].get('memberOf', [])
     
 def get_group_id(group, db):
-    """
-    """
     sql = """SELECT rowid FROM groups WHERE grp = ?;"""
     c = db.cursor()
     c.execute(sql, [group])
@@ -608,20 +589,16 @@ def get_group_id(group, db):
 ########################################################################
 ########################################################################
         
-#=======================================================================
-#=======================================================================
 def main():
-    """
-    """
-    service = GroupReceiverService()
+    service = GroupProvisionerService()
     service.startService()
     reactor.run()
 
 if __name__ == "__main__":
     main()
 else:
-    application = service.Application("Twisted Group Server")
-    service = GroupReceiverService()
+    application = service.Application("Twisted Group Provisioner")
+    service = GroupProvisionerService()
     service.setServiceParent(application)
     
     
