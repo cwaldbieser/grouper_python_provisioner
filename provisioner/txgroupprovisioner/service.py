@@ -15,10 +15,10 @@ from textwrap import dedent
 
 # External modules
 # - python-ldap
-import ldap
-import ldap.dn
-import ldap.modlist
-from ldap.filter import escape_filter_chars as escape_fltr
+#import ldap
+#import ldap.dn
+#import ldap.modlist
+#from ldap.filter import escape_filter_chars as escape_fltr
 # - Twisted
 from twisted.application import service
 from twisted.application.service import Service
@@ -253,9 +253,14 @@ class GroupProvisionerService(Service):
             msg = yield queue.get()
             log.debug('Received: "{msg}" from channel # {channel}.', msg=msg.content.body, channel=channel.id)
             parts = msg.content.body.split("\n")
-            group = parts[0]
-            subject = parts[1]
-            action = parts[2]
+            try:
+                group = parts[0]
+                subject = parts[1]
+                action = parts[2]
+            except IndexError:
+                log.warn("Skipping invalid message: {msg!r}", msg=msg.content.body)
+                yield channel.basic_ack(delivery_tag=msg.delivery_tag)
+                continue
             try:
                 yield task.deferLater(reactor, delay, record_group_action, group, action, subject, db_str)
             except Exception as ex:

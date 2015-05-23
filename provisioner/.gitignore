@@ -1,3 +1,7 @@
 *.pyc
 *.swp
+*.db
+*.json
+*.cfg
+*.pid
 twisted/plugins/dropin.cache
