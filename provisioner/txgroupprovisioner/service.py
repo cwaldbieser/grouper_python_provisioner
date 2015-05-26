@@ -36,15 +36,14 @@ import txamqp.spec
 from logging import make_syslog_observer
 
 def load_config(config_file=None):
-    if config_file is None:
-        basefile="txgroupprovisioner.cfg"
-        syspath = os.path.join("/etc/grouper", basefile)
-        homepath = os.path.expanduser("~/.{0}".format(basefile))
-        apppath = os.path.join(os.path.dirname(__file__), basefile)
-        curpath = os.path.join(os.curdir, basefile)
-        files = [syspath, homepath, apppath, curpath]
-    else:
-        files = [config_file]
+    basefile="txgroupprovisioner.cfg"
+    syspath = os.path.join("/etc/grouper", basefile)
+    homepath = os.path.expanduser("~/.{0}".format(basefile))
+    apppath = os.path.join(os.path.dirname(__file__), basefile)
+    curpath = os.path.join(os.curdir, basefile)
+    files = [syspath, homepath, apppath, curpath]
+    if config_file is not None:
+        files.append(config_file)
     spec_dir = os.path.join(os.path.split(os.path.split(__file__)[0])[0], "spec")
     spec_path = os.path.join(spec_dir, "amqp0-9-1.stripped.xml")
     defaults = dedent("""\
@@ -136,7 +135,7 @@ class GroupProvisionerService(Service):
     def __init__(
             self, 
             a_reactor=None, 
-            ws_endpoint_str=None, 
+            config=None, 
             use_syslog=False, 
             syslog_prefix=None,
             logfile=None):
@@ -152,12 +151,13 @@ class GroupProvisionerService(Service):
         self.service_state = ServiceState()
         self.use_syslog = use_syslog
         self.syslog_prefix = syslog_prefix
+        self.config = config
         
     def startService(self):
         """
         Start the service.
         """
-        scp = load_config()
+        scp = load_config(config_file=self.config)
         app_info = section2dict(scp, "APPLICATION")
         log_level = app_info.get("log_level", "INFO")
         self.log = Logger(
@@ -592,6 +592,7 @@ def get_group_id(group, db):
         return result[0] 
     
 ########################################################################
+# Entry points
 ########################################################################
         
 def main():

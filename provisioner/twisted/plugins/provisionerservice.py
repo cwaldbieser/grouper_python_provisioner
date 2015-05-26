@@ -15,7 +15,10 @@ from zope.interface import implements
 
 class Options(usage.Options):
     optParameters = [
-                        ["ws-endpoint", "w", "tcp:10389", "The endpoint listen on for the admin web service (default 'tcp:10389')."],
+                        ["config", "c", None, 
+                            "Options in a specific "
+                            "configuration override options in any other "
+                            "configurations."],
                     ]
 
 
@@ -41,7 +44,7 @@ class MyServiceMaker(object):
         """
         Construct a server from a factory.
         """
-        ws_endpoint = options['ws-endpoint']
+        config = options['config']
         # Parse the original `twistd` command line for logging options.
         parser = argparse.ArgumentParser("twistd argument parser")
         parser.add_argument(
@@ -58,7 +61,7 @@ class MyServiceMaker(object):
         args, unknown = parser.parse_known_args()
         # Create the service.
         return GroupProvisionerService(
-            ws_endpoint_str=ws_endpoint, 
+            config=config, 
             use_syslog=args.syslog, 
             syslog_prefix=args.prefix,
             logfile=args.logfile)
