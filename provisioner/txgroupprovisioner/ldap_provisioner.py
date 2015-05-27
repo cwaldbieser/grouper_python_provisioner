@@ -5,6 +5,7 @@ import ldap.modlist
 from ldap.filter import escape_filter_chars as escape_fltr
 from twisted.plugin import IPlugin
 from zope.interface import implements
+from twisted.enterprise import adbapi
 from twisted.internet.defer import inlineCallbacks
 from twisted.internet import reactor, task, threads
 from twisted.internet.task import LoopingCall
@@ -15,7 +16,6 @@ import datetime
 from json import load
 import os
 import os.path
-import sqlite3
 from textwrap import dedent
 from config import load_config, section2dict
 from logging import make_syslog_observer
@@ -40,7 +40,7 @@ class LDAPProvisioner(object):
     service_state = None
     log = None
     config = None
-    batch_time = 10
+    batch_time = 30
 
     @inlineCallbacks
     def load_config(self, config_file=None, default_log_level='info', syslog_prefix=None):
@@ -64,7 +64,10 @@ class LDAPProvisioner(object):
         if (not provision_user) and (not provision_group):
             log.error("Must provision enable at least one of 'PROVISIONER.provision_user' or `PROVISIONER.provision_group`.")
             sys.exit(1) 
-        yield threads.deferToThread(self.init_db)
+        self.batch_time = config['batch_interval']
+        db_str = config['sqlite_db']
+        self.dbpool = adbapi.ConnectionPool("sqlite3", db_str)
+        yield self.init_db
         processor = LoopingCall(self.process_requests)
         processor.start(self.batch_time)
         self.processor = processor
@@ -82,54 +85,49 @@ class LDAPProvisioner(object):
         user_attribute = memberOf
         group_value_type = dn
         user_value_type = dn
+        batch_interval = 30
         """)
 
+    @inlineCallbacks
     def init_db(self):
-        """
-        WARNING: Blocking call.
-        """
-        db_str = self.config['sqlite_db']
-        with sqlite3.connect(db_str) as db:
-            commands = []
-            sql = dedent("""\
-                CREATE TABLE intake(
-                    grp TEXT NOT NULL,
-                    member TEXT NOT NULL,
-                    op TEXT NOT NULL
-                );
-                """)
-            commands.append(sql)
-            sql = dedent("""\
-                CREATE TABLE groups(
-                    grp TEXT NOT NULL
-                );
-                """)
-            commands.append(sql)
-            sql = dedent("""\
-                CREATE TABLE member_ops(
-                    member TEXT NOT NULL,
-                    op TEXT NOT NULL,
-                    grp INTEGER NOT NULL
-                );
-                """)
-            commands.append(sql)
-            sql = """CREATE UNIQUE INDEX ix0 ON groups (grp);"""
-            commands.append(sql)
-            sql = """CREATE UNIQUE INDEX ix1 ON member_ops (member, grp);"""
-            commands.append(sql)
-            for sql in commands:
-                try:
-                    c = db.cursor()
-                    c.execute(sql)
-                    db.commit()
-                except sqlite3.OperationalError as ex:
-                    if not str(ex).endswith(" already exists"):
-                        raise
+        dbpool = self.dbpool
+        commands = []
+        sql = dedent("""\
+            CREATE TABLE intake(
+                grp TEXT NOT NULL,
+                member TEXT NOT NULL,
+                op TEXT NOT NULL
+            );
+            """)
+        commands.append(sql)
+        sql = dedent("""\
+            CREATE TABLE groups(
+                grp TEXT NOT NULL
+            );
+            """)
+        commands.append(sql)
+        sql = dedent("""\
+            CREATE TABLE member_ops(
+                member TEXT NOT NULL,
+                op TEXT NOT NULL,
+                grp INTEGER NOT NULL
+            );
+            """)
+        commands.append(sql)
+        sql = """CREATE UNIQUE INDEX ix0 ON groups (grp);"""
+        commands.append(sql)
+        sql = """CREATE UNIQUE INDEX ix1 ON member_ops (member, grp);"""
+        commands.append(sql)
+        for sql in commands:
+            try:
+                yield dbpool.runOperation(sql)
+            except sqlite3.OperationalError as ex:
+                if not str(ex).endswith(" already exists"):
+                    raise
 
     def provision(self, group, subject, action):
         db_str = self.config['sqlite_db']
-        d = threads.deferToThread(add_action_to_intake, group, action, subject, db_str)
-        return d
+        d = add_action_to_intake(group, action, subject)
 
     def process_requests(self):
         log = self.log
@@ -147,7 +145,7 @@ class LDAPProvisioner(object):
             log.debug("LDAP provisioner last process loop successful.")
             return result
             
-        d = threads.deferToThread(self.blocking_process_requests, db_str, ldap_info, group_map)
+        d = self.provision_ldap()
         d.addCallback(set_last_update, service_state)
         #If there is an error, log it, but keep on looping.
         d.addErrback(self.log.failure, "Error while processing provisioning request(s): ")
@@ -159,95 +157,99 @@ class LDAPProvisioner(object):
             result = result.lower()
         return result
         
-    def blocking_process_requests(self, db_str, ldap_info, group_map):
-        ldap.set_option(ldap.OPT_X_TLS_REQUIRE_CERT, ldap.OPT_X_TLS_ALLOW)
-        with sqlite3.connect(db_str) as db:
-            # Transfer intake table to normalized batch tables.
-            self.transfer_intake_to_batch(db)
-            # Process the normalized batch.
-            base_dn = ldap_info['base_dn']
-            with self.connect_to_directory(ldap_info['url']) as lconn:
-                lconn.start_tls_s()
-                lconn.simple_bind(ldap_info['bind_dn'], ldap_info['passwd'])
-            
-                group_sql = """SELECT rowid, grp FROM groups ORDER BY grp ASC;"""
-                memb_add_sql = """SELECT member FROM member_ops WHERE grp = ? AND op = 'addMembership' ORDER BY member ASC;""" 
-                memb_del_sql = """SELECT member FROM member_ops WHERE grp = ? AND op = 'deleteMembership' ORDER BY member ASC;""" 
-                subj_sql = """SELECT DISTINCT member FROM member_ops ORDER BY member ASC;"""
-                subj_add_sql = dedent("""\
-                    SELECT DISTINCT groups.grp 
-                    FROM groups
-                        INNER JOIN member_ops
-                            ON groups.rowid = member_ops.grp
-                    WHERE member = ?
-                    AND op = 'addMembership'
-                    ORDER BY groups.grp ASC
-                    ;
-                    """)
-                subj_del_sql = dedent("""\
-                    SELECT DISTINCT groups.grp 
-                    FROM groups
-                        INNER JOIN member_ops
-                            ON groups.rowid = member_ops.grp
-                    WHERE member = ?
-                    AND op = 'deleteMembership'
-                    ORDER BY groups.grp ASC
-                    ;
-                    """)
+    @inlineCallbacks
+    def provision_ldap(self):
+        group_map = self.group_map
+        ldap_info = self.config
+        dbpool = self.dbpool
+
+        # Transfer intake table to normalized batch tables.
+        self.transfer_intake_to_batch(db)
+        # Process the normalized batch.
+        base_dn = ldap_info['base_dn']
+        with self.connect_to_directory(ldap_info['url']) as lconn:
+            lconn.start_tls_s()
+            lconn.simple_bind(ldap_info['bind_dn'], ldap_info['passwd'])
+        
+            group_sql = """SELECT rowid, grp FROM groups ORDER BY grp ASC;"""
+            memb_add_sql = """SELECT member FROM member_ops WHERE grp = ? AND op = 'addMembership' ORDER BY member ASC;""" 
+            memb_del_sql = """SELECT member FROM member_ops WHERE grp = ? AND op = 'deleteMembership' ORDER BY member ASC;""" 
+            subj_sql = """SELECT DISTINCT member FROM member_ops ORDER BY member ASC;"""
+            subj_add_sql = dedent("""\
+                SELECT DISTINCT groups.grp 
+                FROM groups
+                    INNER JOIN member_ops
+                        ON groups.rowid = member_ops.grp
+                WHERE member = ?
+                AND op = 'addMembership'
+                ORDER BY groups.grp ASC
+                ;
+                """)
+            subj_del_sql = dedent("""\
+                SELECT DISTINCT groups.grp 
+                FROM groups
+                    INNER JOIN member_ops
+                        ON groups.rowid = member_ops.grp
+                WHERE member = ?
+                AND op = 'deleteMembership'
+                ORDER BY groups.grp ASC
+                ;
+                """)
+            c = db.cursor()
+            c.execute(group_sql)
+            mapped_groups = {}
+            for groupid, group in list(fetch_batch(c)):
+                ldap_group = self.group_to_ldap_group(group, group_map)
+                if ldap_group is None:
+                    #print "[DEBUG] Group '{group}' is not a target group.  Skipping ...".format(group=ldap_group)
+                    c = db.cursor()
+                    c.execute("""DELETE FROM member_ops WHERE grp = ?;""", [groupid])
+                    c = db.cursor()
+                    c.execute("""DELETE FROM groups WHERE grp = ?;""", [group])
+                    db.commit()
+                    continue
                 c = db.cursor()
-                c.execute(group_sql)
-                mapped_groups = {}
-                for groupid, group in list(fetch_batch(c)):
-                    ldap_group = self.group_to_ldap_group(group, group_map)
-                    if ldap_group is None:
-                        #print "[DEBUG] Group '{group}' is not a target group.  Skipping ...".format(group=ldap_group)
-                        c = db.cursor()
-                        c.execute("""DELETE FROM member_ops WHERE grp = ?;""", [groupid])
-                        c = db.cursor()
-                        c.execute("""DELETE FROM groups WHERE grp = ?;""", [group])
-                        db.commit()
-                        continue
-                    c = db.cursor()
-                    c.execute(memb_add_sql, [groupid])
-                    add_membs = set([r[0] for r in list(fetch_batch(c))])
-                    c = db.cursor()
-                    c.execute(memb_del_sql, [groupid])
-                    del_membs = set([r[0] for r in list(fetch_batch(c))])
-                    if len(add_membs) > 0 or len(del_membs) > 0:
-                        #print "[DEBUG] Applying changes to group {group} ...".format(group=ldap_group)
-                        #print "- Adds -"
-                        #print '\n  '.join(sorted(add_membs))
-                        #print "- Deletes -"
-                        #print '\n  '.join(sorted(del_membs))
-                        group_dn = self.apply_changes_to_ldap_group(ldap_group, add_membs, del_membs, base_dn, lconn, ldap_info)
-                        mapped_groups[ldap_group] = group_dn
+                c.execute(memb_add_sql, [groupid])
+                add_membs = set([r[0] for r in list(fetch_batch(c))])
                 c = db.cursor()
-                c.execute(subj_sql)
-                for subject_id in list(r[0] for r in fetch_batch(c)): 
-                    c = db.cursor()
-                    c.execute(subj_add_sql, [subject_id])
-                    add_membs = set(mapped_groups[self.group_to_ldap_group(r[0], group_map)] for r in fetch_batch(c))
-                    c = db.cursor()
-                    c.execute(subj_del_sql, [subject_id])
-                    del_membs = set(mapped_groups[self.group_to_ldap_group(r[0], group_map)] for r in fetch_batch(c))
-                    if len(add_membs) > 0 or len(del_membs) > 0:
-                        #print "[DEBUG] Applying changes to subject {subject} ...".format(subject=subject_id)
-                        #print "- Adds -"
-                        #print '\n  '.join(sorted(add_membs))
-                        #print "- Deletes -"
-                        #print '\n  '.join(sorted(del_membs))
-                        
-                        self.apply_changes_to_ldap_subj(subject_id, add_membs, del_membs, base_dn, lconn, ldap_info)
+                c.execute(memb_del_sql, [groupid])
+                del_membs = set([r[0] for r in list(fetch_batch(c))])
+                if len(add_membs) > 0 or len(del_membs) > 0:
+                    #print "[DEBUG] Applying changes to group {group} ...".format(group=ldap_group)
+                    #print "- Adds -"
+                    #print '\n  '.join(sorted(add_membs))
+                    #print "- Deletes -"
+                    #print '\n  '.join(sorted(del_membs))
+                    group_dn = self.apply_changes_to_ldap_group(ldap_group, add_membs, del_membs, base_dn, lconn, ldap_info)
+                    mapped_groups[ldap_group] = group_dn
+            c = db.cursor()
+            c.execute(subj_sql)
+            for subject_id in list(r[0] for r in fetch_batch(c)): 
+                c = db.cursor()
+                c.execute(subj_add_sql, [subject_id])
+                add_membs = set(mapped_groups[self.group_to_ldap_group(r[0], group_map)] for r in fetch_batch(c))
+                c = db.cursor()
+                c.execute(subj_del_sql, [subject_id])
+                del_membs = set(mapped_groups[self.group_to_ldap_group(r[0], group_map)] for r in fetch_batch(c))
+                if len(add_membs) > 0 or len(del_membs) > 0:
+                    #print "[DEBUG] Applying changes to subject {subject} ...".format(subject=subject_id)
+                    #print "- Adds -"
+                    #print '\n  '.join(sorted(add_membs))
+                    #print "- Deletes -"
+                    #print '\n  '.join(sorted(del_membs))
                     
-                sql = """DELETE FROM groups;"""
-                c = db.cursor()
-                c.execute(sql)
-                sql = """DELETE FROM member_ops;"""
-                c = db.cursor()
-                c.execute(sql)
-                db.commit()
+                    self.apply_changes_to_ldap_subj(subject_id, add_membs, del_membs, base_dn, lconn, ldap_info)
                 
-    def transfer_intake_to_batch(self, db):
+            sql = """DELETE FROM groups;"""
+            c = db.cursor()
+            c.execute(sql)
+            sql = """DELETE FROM member_ops;"""
+            c = db.cursor()
+            c.execute(sql)
+            db.commit()
+                
+    @inlineCallbacks
+    def transfer_intake_to_batch(self):
         """
         Transfer the intake table to the batch tables.
         This algorithm depends on the behavior of the SQLite3 ROWID-- specifically
@@ -256,16 +258,14 @@ class LDAPProvisioner(object):
         
         Ref: https://www.sqlite.org/autoinc.html
         """
+        dbpool = self.dbpool
         sql = dedent("""\
             SELECT rowid, grp, member, op
             FROM intake
             ORDER BY rowid ASC
             ;
             """)
-        c = db.cursor()
-        c.execute(sql)
-        intake = list(fetch_batch(c))
-        del c
+        intake = yield dbpool.runQuery(sql)
         for rowid, group, member, action in intake:
             groupid = self.get_group_id(group, db)
             sql = dedent("""\
@@ -379,21 +379,25 @@ class LDAPProvisioner(object):
             raise
         result = results[0]
         return result[1].get(user_attrib, [])
-        
-    def get_group_id(self, group, db):
+
+    @inlineCallbacks        
+    def get_group_id(self, group):
+        dbpool = self.dbpool
         sql = """SELECT rowid FROM groups WHERE grp = ?;"""
-        c = db.cursor()
-        c.execute(sql, [group])
-        result = c.fetchone()
+        result = yield dbpool.runQuery(sql, [group])
         if result is None:
             sql = """INSERT INTO groups (grp) VALUES (?);"""
-            c = db.cursor()
-            c.execute(sql, [group])
-            group_id = c.lastrowid
-            db.commit()
+            yield dbpool.runOperation(sql, [group])
+            group_id = dbpool.lastrowid
             return group_id
         else:
-            return result[0] 
+            returnValue(result[0])
+
+    @inlineCallbacks
+    def add_action_to_intake(group, action, member):
+        dbpool = self.dbpool
+        sql = """INSERT INTO intake(grp, member, op) VALUES(?, ?, ?);"""
+        yield dbpool.runOperation(sql, [group, member, action])
     
 
 def load_group_map(gm):
@@ -413,21 +417,4 @@ def fetch_batch(cursor, batch_size=None, **kwds):
             break
         for row in rows:
             yield row
-
-def add_action_to_intake(group, action, member, db_str):
-    """
-    WARNING: Blocking call.
-    Adds a member add/delete to the intake table.
-    SQLite3 guaruntees the ROWID of the table will be monotomically increasing
-    as long as the max ROWID value is not hit and as long as the max value in the 
-    table is never deleted.  If the table is empty, a ROWID of 1 is used.
-    See: https://www.sqlite.org/autoinc.html
-    """
-    with sqlite3.connect(db_str) as db:
-        sql = dedent("""\
-            INSERT INTO intake(grp, member, op) VALUES(?, ?, ?);
-            """)
-        c = db.cursor()
-        c.execute(sql, [group, member, action])
-        db.commit()
 
