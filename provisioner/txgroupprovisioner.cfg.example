@@ -1,12 +1,5 @@
 [APPLICATION]
 log_level = DEBUG
-sqlite_db = groups.db
-group_map = groupmap.json
-
-[LDAP]
-log_level = WARN
-url = ldap://127.0.0.1:389/
-start_tls = 1
 
 [AMQP]
 log_level = DEBUG
@@ -16,6 +9,17 @@ exchange = grouper_exchange
 vhost = /
 user = guest
 passwd = guest
-queue = ldap_group_00
+queue = ldap_worker
 route_map = queuemap.json
+
+[PROVISIONER]
+log_level = DEBUG
+sqlite_db = groups.db
+group_map = groupmap.json
+url = ldap://127.0.0.1:389/
+start_tls = 1
+base_dn = o=lafayette
+bind_dn = cn=manager,o=lafayette
+passwd = PASSWORD
+empty_dn = cn=nobody,ou=nowhere,o=lafayette
 

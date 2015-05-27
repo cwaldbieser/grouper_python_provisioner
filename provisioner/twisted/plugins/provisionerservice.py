@@ -13,13 +13,13 @@ from twisted.plugin import getPlugins, IPlugin
 from twisted.python import usage
 from zope.interface import implements
 
+
 class Options(usage.Options):
     optParameters = [
-                        ["config", "c", None, 
-                            "Options in a specific "
-                            "configuration override options in any other "
-                            "configurations."],
-                    ]
+        ["config", "c", None, 
+            "Options in a specific configuration override options in any other "
+            "configurations."],
+    ]
 
 
 class TwistdOpts(usage.Options):
