@@ -4,7 +4,7 @@ from ldaptor.protocols import pureldap
 from twisted.plugin import IPlugin
 from zope.interface import implements
 from twisted.enterprise import adbapi
-from twisted.internet.defer import inlineCallbacks, returnValue
+from twisted.internet.defer import gatherResults, inlineCallbacks, returnValue
 from twisted.internet import reactor, task, threads
 from twisted.internet.task import LoopingCall
 from twisted.logger import Logger
@@ -271,10 +271,10 @@ class LDAPProvisioner(object):
                     "LDAP client BIND as '{bind_dn}'.",
                     event_type='ldap_bind',
                     bind_dn=bind_dn)
-            group_sql = """SELECT rowid, grp FROM groups ORDER BY grp ASC;"""
-            memb_add_sql = """SELECT member FROM member_ops WHERE grp = ? AND op = 'addMembership' ORDER BY member ASC;""" 
-            memb_del_sql = """SELECT member FROM member_ops WHERE grp = ? AND op = 'deleteMembership' ORDER BY member ASC;""" 
-            subj_sql = """SELECT DISTINCT member FROM member_ops ORDER BY member ASC;"""
+            group_sql = "SELECT rowid, grp FROM groups ORDER BY grp ASC;"
+            memb_add_sql = "SELECT member FROM member_ops WHERE grp = ? AND op = 'addMembership' ORDER BY member ASC;" 
+            memb_del_sql = "SELECT member FROM member_ops WHERE grp = ? AND op = 'deleteMembership' ORDER BY member ASC;" 
+            subj_sql = "SELECT DISTINCT member FROM member_ops ORDER BY member ASC;"
             subj_add_sql = dedent("""\
                 SELECT DISTINCT groups.grp 
                 FROM groups
@@ -457,17 +457,20 @@ class LDAPProvisioner(object):
     def load_subjects(self, subject_ids, client, attribs=()):
         base_dn = self.base_dn
         rval = []
+        dlist = []
         for subject_id in subject_ids:
             fltr = "(uid={0})".format(escape_filter_chars(subject_id))
             o = ldapsyntax.LDAPEntry(client, base_dn)
-            try:
-                results = yield o.search(filterText=fltr, attributes=attribs) 
-            except Exception as ex:
-                self.log.error(
-                    "Error while searching for LDAP subject: {subject_id}", 
-                    subject_id=subject_id) 
-                raise
-            for result in results:
+            dlist.append(o.search(filterText=fltr, attributes=attribs))
+        try:
+            results = yield gatherResults(dlist) 
+        except Exception as ex:
+            self.log.error(
+                "Error while searching for LDAP subjects", 
+                event_type='error_load_ldap_subjects') 
+            raise
+        for subject_id, resultset in zip(subject_ids, results):
+            for result in resultset:
                 rval.append((subject_id, result))
         returnValue(rval)
 
