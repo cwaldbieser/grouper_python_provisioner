@@ -9,6 +9,7 @@ from twisted.internet import reactor, task, threads
 from twisted.internet.task import LoopingCall
 from twisted.logger import Logger
 from txgroupprovisioner.interface import IProvisionerFactory, IProvisioner
+from collections import Mapping, namedtuple
 import contextlib
 import datetime
 from json import load
@@ -18,6 +19,8 @@ from textwrap import dedent
 from config import load_config, section2dict
 from logging import make_syslog_observer
 import urlparse
+
+LDAPGroupTarget = namedtuple("LDAPTargetGroup", ['group', 'create_group', 'create_context'])
 
 class LDAPProvisionerFactory(object):
     implements(IPlugin, IProvisionerFactory)
@@ -56,10 +59,9 @@ class LDAPProvisioner(object):
         self.log = log
         log.debug("Initialized logging for LDAP provisioner.", 
             event_type='init_provisioner_logging')
-        group_map = load_group_map(config['group_map'])
+        self.load_group_map(config['group_map'])
         log.debug("Loaded group map for LDAP provisioner.", 
             event_type='loaded_provisioner_group_map')
-        self.group_map = group_map
         base_dn = config.get('base_dn', None)
         if base_dn is None:
             log.error("Must provide option `{section}:{option}`.", 
@@ -233,11 +235,27 @@ class LDAPProvisioner(object):
         d.addErrback(handleError, self.log)
         return d
     
-    def group_to_ldap_group(self, g, group_map):
+    def group_to_ldap_group(self, g):
+        group_map = self.group_map
+        stem_map = self.stem_map
         result = group_map.get(g, None)
         if result is not None:
-            result = result.lower()
-        return result
+            ldap_group = result['group']
+            create_group = result['create_group']
+            create_context = result.get('create_context', None)
+            return LDAPGroupTarget(ldap_group, create_group, create_context)
+        else:
+            parts = g.split(':')
+            stem_parts = parts[:-1]
+            stem = ':'.join(stem_parts) + ':'
+            result = stem_map.get(stem, None)
+            if result is not None:
+                ldap_group = result['template'].format(group=group)
+                create_group = result['create_group']
+                create_context = result.get('create_context', None)
+                return LDAPGroupTarget(ldap_group, create_group, create_context)
+            else:
+                return None 
         
     @inlineCallbacks
     def provision_ldap(self):
@@ -298,12 +316,12 @@ class LDAPProvisioner(object):
             results = yield self.runDBCommand(group_sql)
             mapped_groups = {}
             for groupid, group in results:
-                ldap_group = self.group_to_ldap_group(group, group_map)
-                if ldap_group is None:
+                target = self.group_to_ldap_group(group)
+                if target is None:
                     log.debug(
-                        "Group '{group}' is not a target group.  Skipping ...", 
+                        "Group '{group}' is not a targetted group.  Skipping ...", 
                         event_type='log',
-                        group=ldap_group)
+                        group=group)
                     yield self.runDBCommand(
                         '''DELETE FROM member_ops WHERE grp = ?;''', [groupid], is_query=False)
                     yield self.runDBCommand(
@@ -319,24 +337,24 @@ class LDAPProvisioner(object):
                     log.debug(
                         "Applying changes to group {group} ...", 
                         event_type='log',
-                        group=ldap_group)
+                        group=target.group)
                     group_dn = yield self.apply_changes_to_ldap_group(
-                        ldap_group, add_membs, del_membs, client)
+                        target, add_membs, del_membs, client)
                     log.debug(
                         "Applied changes to LDAP group {ldap_group}.",
                         event_type='ldap_group_change',
-                        ldap_group=ldap_group)
-                    mapped_groups[ldap_group] = group_dn
+                        ldap_group=group_dn)
+                    mapped_groups[target.group] = group_dn
             results = yield self.runDBCommand(subj_sql)
             for (subject_id,) in results: 
                 add_results = yield self.runDBCommand(subj_add_sql, [subject_id])
-                add_membs = set(mapped_groups[self.group_to_ldap_group(r[0], group_map)] 
-                    for r in add_results)
+                add_membs = [self.group_to_ldap_group(r[0]) for r in add_results]
                 del add_results
+                add_membs = set(mapped_groups[t.group] for t in add_membs if t is not None)
                 del_results = yield self.runDBCommand(subj_del_sql, [subject_id])
-                del_membs = set(mapped_groups[self.group_to_ldap_group(r[0], group_map)] 
-                    for r in del_results)
+                del_membs = [self.group_to_ldap_group(r[0]) for r in del_results]
                 del del_results
+                del_membs = set(mapped_groups[t.group] for t in del_membs if t is not None)
                 if len(add_membs) > 0 or len(del_membs) > 0:
                     log.debug(
                         "Applying changes to subject {subject} ...",
@@ -392,7 +410,8 @@ class LDAPProvisioner(object):
             yield self.runDBCommand(sql, [rowid], is_query=False)
 
     @inlineCallbacks 
-    def apply_changes_to_ldap_group(self, group, adds, deletes, client):
+    def apply_changes_to_ldap_group(self, target, adds, deletes, client):
+        log = self.log
         config = self.config
         subject_id_attribute = self.subject_id_attribute
         base_dn = self.base_dn
@@ -403,10 +422,21 @@ class LDAPProvisioner(object):
         fq_adds = set(str(x[1].dn).lower() for x in results)
         results = yield self.load_subjects(deletes, client, attribs=[subject_id_attribute])
         fq_deletes = set(str(x[1].dn).lower() for x in results)
-        group_entry = yield self.lookup_group(group, client) 
+        group_entry = yield self.lookup_group(target.group, client) 
+        needs_create = False
         if group_entry is None:
-            returnValue(None) 
-        memb_set = set([m.lower() for m in group_entry[group_attribute]])
+            if target.create_group:
+                log.debug(
+                    "Creating LDAP group {ldap_group},{ldap_context} ...",
+                    event_type='create_ldap_group',
+                    ldap_group=target.group,
+                    ldap_context=target.create_context)
+                memb_set = set([])
+                needs_create = True
+            else: 
+                returnValue(None) 
+        else:
+            memb_set = set([m.lower() for m in group_entry[group_attribute]])
         memb_set = memb_set.union(fq_adds)
         memb_set = memb_set - fq_deletes
         if empty_dn is not None:
@@ -417,11 +447,26 @@ class LDAPProvisioner(object):
         members = list(memb_set)
         members.sort()
         if provision_group:
+            if needs_create:
+                o = ldapsyntax.LDAPEntry(client, ldap_context)
+                attribs = {
+                    'objectClass': ['top', 'groupOfNames'],
+                    'member': members}
+                rdn = "cn={0}".format(target_group) #TODO escape DN chars?
+                try:
+                    group_entry = yield o.addChild(rdn, attribs)
+                except Exception as ex:
+                    log.error(
+                        "Error while trying create LDAP group '{rdn},{ldap_context}'.",
+                        event_type='ldap_error',
+                        rdn=rdn,
+                        ldap_context=ldap_context)
+                    raise
             try:
                 group_entry[group_attribute] = members
                 yield group_entry.commit()
             except Exception as ex:
-                self.log.error("Error while attempting to modify LDAP group: {group}", group=group_dn) 
+                log.error("Error while attempting to modify LDAP group: {group}", group=group_dn) 
                 raise
         returnValue(str(group_entry.dn).lower())
        
@@ -523,10 +568,87 @@ class LDAPProvisioner(object):
             action=action)
     
 
-def load_group_map(gm):
-    with open(gm, "r") as f:
-        o = load(f)
-    return o
+    def load_group_map(self, gm):
+        log = self.log
+        with open(gm, "r") as f:
+            try:
+                o = load(f)
+            except Exception as ex:
+                log.failure("Error reading group mapping.")
+                sys.exit(1)
+        direct_map = {}
+        stem_map = {}
+        for group, value in o.iteritems():
+            is_folder = group.endswith(":")
+            if not is_folder:
+                if isinstance(value, basestring):
+                    direct_map[group] = {'group': value, 'create_group': False}
+                elif isinstance(value, Mapping):
+                    if not 'group' in value:
+                        log.warn(
+                            "Group mapping for '{group}' does not have a valid target (no 'group' option).",
+                            event_type='groupmap_parse_error',
+                            group=group)
+                        continue
+                    ldap_group = value['group']
+                    if not isinstance(ldap_group, basestring):
+                        log.warn(
+                            "Group mapping for '{group}' does not have a valid target ('group' must be a name).",
+                            event_type='groupmap_parse_error',
+                            group=group)
+                        continue
+                    create_group = bool(value.get('create_group', False))
+                    create_context = value.get('create_context', None)
+                    if create_context is None and create_group:
+                        log.warn(
+                            "Create group option is set for group '{group}' but no 'create_context' was specified.",
+                            event_type='groupmap_parse_error',
+                            group=group)
+                        create_group = False
+                    props = {'group': ldap_group, 'create_group': create_group}
+                    if create_group:
+                        props['create_context'] = create_context
+                    direct_map[group] = props
+                else:
+                    log.warn(
+                        "Invalid target for group mapping '{group}'.",
+                        event_type='groupmap_parse_error',
+                        group=group)
+                    continue
+            else:
+                if not isinstance(value, Mapping):
+                    log.warn(
+                        "Invalid target for stem '{stem}'.",
+                        event_type='groupmap_parse_error',
+                        stem=group)
+                    continue
+                template = value.get('template', None)
+                create_group = bool(value.get('create_group', False))
+                create_context = value.get('create_context', None)
+                if template is None:
+                    log.warn(
+                        "Invalid target for stem mapping '{stem}' (no 'template' option).",
+                        event_type='groupmap_parse_error',
+                        stem=group)
+                    continue
+                if not isinstance(template, basestring): 
+                    log.warn(
+                        "Invalid target for stem mapping '{stem}' ('template' must be string-like).",
+                        event_type='groupmap_parse_error',
+                        stem=group)
+                    continue
+                if create_context is None and create_group:
+                    log.warn(
+                        "Create group option is set for stem '{stem}' but no 'create_context' was specified.",
+                        event_type='groupmap_parse_error',
+                        stem=group)
+                    create_group = False
+                props = {'template': template, 'create_group': create_group}
+                if create_group:
+                    props['create_context'] = create_context
+                stem_map[group] = props
+            self.group_map = direct_map
+            self.stem_map = stem_map
         
 def escape_filter_chars(assertion_value,escape_mode=0):
     """
