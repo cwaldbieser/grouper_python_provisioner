@@ -39,7 +39,7 @@ class LDAPProvisioner(object):
     service_state = None
     log = None
     config = None
-    batch_time = 30
+    batch_time = 10
     subject_id_attribute = 'uid'
     group_id_attribute = 'cn'
 
@@ -54,13 +54,18 @@ class LDAPProvisioner(object):
                 log_level, 
                 prefix=syslog_prefix))
         self.log = log
-        log.debug("Initialized logging for LDAP provisioner.")
+        log.debug("Initialized logging for LDAP provisioner.", 
+            event_type='init_provisioner_logging')
         group_map = load_group_map(config['group_map'])
-        log.debug("Loaded group map for LDAP provisioner.")
+        log.debug("Loaded group map for LDAP provisioner.", 
+            event_type='loaded_provisioner_group_map')
         self.group_map = group_map
         base_dn = config.get('base_dn', None)
         if base_dn is None:
-            log.error("Must provide option `PROVISIONER.base_dn`.")
+            log.error("Must provide option `{section}:{option}`.", 
+                event_type='provisioner_config_error', 
+                section='PROVISIONER',
+                option='base_dn')
             sys.exit(1)
         self.base_dn = base_dn
         self.group_attribute = config['group_attribute']
@@ -74,10 +79,6 @@ class LDAPProvisioner(object):
             self.ldap_port = int(host_port[1])
         else:
             self.ldap_port = 389
-        log.debug(
-            "LDAP host: {ldap_host}, LDAP port: {ldap_port}", 
-            ldap_host=self.ldap_host,
-            ldap_port=self.ldap_port)
         self.start_tls = bool(int(config.get('start_tls', 0)))
         provision_user = bool(int(config.get('provision_user', 0)))
         provision_group = bool(int(config.get('provision_group', 0)))
@@ -86,6 +87,16 @@ class LDAPProvisioner(object):
             sys.exit(1) 
         self.provision_user = provision_user
         self.provision_group = provision_group
+        log.debug(
+            "Provisioner LDAP settings: host={ldap_host}, port={ldap_port}, "
+            "start_tls={start_tls}, base_dn={base_dn}, "
+            "group_attrib={group_attrib} user_attrib={user_attrib}", 
+            ldap_host=self.ldap_host,
+            ldap_port=self.ldap_port,
+            start_tls=self.start_tls,
+            base_dn=base_dn,
+            group_attrib=self.group_attribute,
+            user_attrib=self.user_attribute)
         self.batch_time = int(config['batch_interval'])
         db_str = config['sqlite_db']
         self.dbpool = adbapi.ConnectionPool("sqlite3", db_str, check_same_thread=False)
@@ -111,8 +122,43 @@ class LDAPProvisioner(object):
         """)
 
     @inlineCallbacks
-    def init_db(self):
+    def runDBCommand(self, cmd, params=None, is_query=True):
+        log = self.log
         dbpool = self.dbpool
+        cmd_str = cmd.replace("\n", " ")
+        args = [cmd]
+        if params is not None:
+            args.append(params)
+        try:
+            if is_query:
+                results = yield dbpool.runQuery(*args)
+            else:
+                results = yield dbpool.runOperation(*args)
+        except Exception as ex:
+            params_str = ''
+            msg_parts = ['DB error: cmd={cmd}']
+            if params is not None:
+                msg_parts.append('params={params!r}')
+            msg_parts.append('error={error}')
+            msg = ', '.join(msg_parts)
+            log.error(
+                msg,
+                error=str(ex),
+                cmd=cmd_str,
+                params=params)
+            raise
+        msg_parts = ["Ran DB command: "]
+        result_count = None
+        if is_query:
+            msg_parts.append("result_count={result_count}, ")
+            result_count = len(results)
+        msg_parts.append("cmd={cmd}")
+        msg = ''.join(msg_parts)
+        log.debug(msg, cmd=cmd_str, result_count=result_count) 
+        returnValue(results)
+
+    @inlineCallbacks
+    def init_db(self):
         commands = []
         sql = dedent("""\
             CREATE TABLE intake(
@@ -142,25 +188,32 @@ class LDAPProvisioner(object):
         commands.append(sql)
         for sql in commands:
             try:
-                yield dbpool.runOperation(sql)
+                yield self.runDBCommand(sql, is_query=False)
             except sqlite3.OperationalError as ex:
                 if not str(ex).endswith(" already exists"):
                     raise
 
     @inlineCallbacks
     def provision(self, group, subject, action):
+        log = self.log
         db_str = self.config['sqlite_db']
-        d = yield self.add_action_to_intake(group, action, subject)
-        self.log.debug(
+        try:
+            d = yield self.add_action_to_intake(group, action, subject)
+        except Exception as ex:
+            log.failure("Error adding provision request to intake.")
+            raise
+            
+        log.debug(
             "Scheduled provision request to be recorded.",
-            event_type='provision_request',
+            event_type='provision_request_scheduled',
             group=group,
             subject=subject,
             action=action)
 
     def process_requests(self):
         log = self.log
-        log.debug("LDAP provisioner processing queued requests ...")
+        log.debug("LDAP provisioner processing queued requests ...",    
+            event_type='provisioner_begin_process_requests')
         service_state = self.service_state
 
         def set_last_update(result, service_state):
@@ -191,7 +244,6 @@ class LDAPProvisioner(object):
         log = self.log
         group_map = self.group_map
         config = self.config
-        dbpool = self.dbpool
         # Transfer intake table to normalized batch tables.
         yield self.transfer_intake_to_batch()
         # Process the normalized batch.
@@ -243,19 +295,7 @@ class LDAPProvisioner(object):
                 ORDER BY groups.grp ASC
                 ;
                 """)
-            try:
-                results = yield dbpool.runQuery(group_sql)
-            except Exception as ex:
-                log.error(
-                    'DB Error: sql="{sql}", error="{error}")',
-                    error=ex,
-                    sql=group_sql)
-                raise
-            log.debug(
-                "Executed DB query: num_results={row_count}, sql={sql}",
-                event_type='db_query',
-                sql=group_sql,
-                row_count=len(results))
+            results = yield self.runDBCommand(group_sql)
             mapped_groups = {}
             for groupid, group in results:
                 ldap_group = self.group_to_ldap_group(group, group_map)
@@ -264,62 +304,15 @@ class LDAPProvisioner(object):
                         "Group '{group}' is not a target group.  Skipping ...", 
                         event_type='log',
                         group=ldap_group)
-                    try:
-                        yield dbpool.runOperation("""DELETE FROM member_ops WHERE grp = ?;""", [groupid])
-                    except Exception as ex:
-                        log.error(
-                            'DB Error deleting from `member_ops`: groupid="{groupid}", error="{error}")',
-                            event_type='db_error',
-                            error=ex,
-                            group=groupid)
-                        raise
-                    log.debug(
-                        "Removed group {group} with id {groupid} from `member_ops` table.", 
-                        event_type='skip_group',
-                        group=ldap_group, 
-                        groupid=groupid)
-                    try:
-                        yield dbpool.runOperation("""DELETE FROM groups WHERE grp = ?;""", [group])
-                    except Exception as ex:
-                        log.error(
-                            'DB Error delting from `groups`: group="{group}", error="{error}")',
-                            event_type='db_error',
-                            error=ex,
-                            group=group)
-                        raise
+                    yield self.runDBCommand(
+                        '''DELETE FROM member_ops WHERE grp = ?;''', [groupid], is_query=False)
+                    yield self.runDBCommand(
+                        '''DELETE FROM groups WHERE grp = ?;''', [group], is_query=False)
                     continue
-                try:
-                    memb_add_results = yield dbpool.runQuery(memb_add_sql, [groupid])
-                except Exception as ex:
-                    log.error(
-                        'DB Error: groupid="{groupid}", sql="{sql}", error="{error}"',
-                        event_type='db_error',
-                        sql=memb_add_sql,
-                        groupid=groupid,
-                        error=ex)
-                    raise
-                log.debug(
-                    "Executed DB query: num_results={row_count}, sql={sql}",
-                    event_type='db_query',
-                    sql=group_sql,
-                    row_count=len(memb_add_results))
+                memb_add_results = yield self.runDBCommand(memb_add_sql, [groupid])
                 add_membs = set([r[0] for r in memb_add_results])
                 del memb_add_results
-                try:
-                    memb_del_results = yield dbpool.runQuery(memb_del_sql, [groupid])
-                except Exception as ex:
-                    log.error(
-                        'DB Error: groupid="{groupid}", sql="{sql}" error="{error}"',
-                        event_type='db_error',
-                        sql=memb_del_sql,
-                        groupid=groupid,
-                        error=ex)
-                    raise
-                log.debug(
-                    "Executed DB query: num_results={row_count}, sql={sql}",
-                    event_type='db_query',
-                    sql=group_sql,
-                    row_count=len(memb_del_results))
+                memb_del_results = yield self.runDBCommand(memb_del_sql, [groupid])
                 del_membs = set([r[0] for r in memb_del_results])
                 del memb_del_results
                 if len(add_membs) > 0 or len(del_membs) > 0:
@@ -334,53 +327,13 @@ class LDAPProvisioner(object):
                         event_type='ldap_group_change',
                         ldap_group=ldap_group)
                     mapped_groups[ldap_group] = group_dn
-            try:
-                results = yield dbpool.runQuery(subj_sql)
-            except Exception as ex:
-                log.error(
-                    'DB Error: sql="{sql}", error="{error}")',
-                    error=ex,
-                    sql=group_sql)
-                raise
-            log.debug(
-                "Ran DB query: num_results={result_count}, sql={sql}",
-                event_type='db_query',
-                result_count=len(results),
-                sql=subj_sql)
+            results = yield self.runDBCommand(subj_sql)
             for (subject_id,) in results: 
-                try:
-                    add_results = yield dbpool.runQuery(subj_add_sql, [subject_id])
-                except Exception as ex:
-                    log.error(
-                        'DB Error: subject_id="{subject_id}", sql="{sql}", error="{error}")',
-                        error=ex,
-                        sql=subj_add_sql,
-                        subject_id=subject_id)
-                    raise
-                log.debug(
-                    "Ran DB query: num_results={result_count}, sql={sql}, subject_id={subject_id}",
-                    event_type='db_query',
-                    result_count=len(add_results),
-                    sql=subj_add_sql,
-                    subject_id=subject_id)
+                add_results = yield self.runDBCommand(subj_add_sql, [subject_id])
                 add_membs = set(mapped_groups[self.group_to_ldap_group(r[0], group_map)] 
                     for r in add_results)
                 del add_results
-                try:
-                    del_results = yield dbpool.runQuery(subj_del_sql, [subject_id])
-                except Exception as ex:
-                    log.error(
-                        'DB Error: subject_id="{subject_id}", sql="{sql}", error="{error}")',
-                        error=ex,
-                        sql=subj_del_sql,
-                        subject_id=subject_id)
-                    raise
-                log.debug(
-                    "Ran DB query: num_results={result_count}, sql={sql}, subject_id={subject_id}",
-                    event_type='db_query',
-                    result_count=len(del_results),
-                    sql=subj_del_sql,
-                    subject_id=subject_id)
+                del_results = yield self.runDBCommand(subj_del_sql, [subject_id])
                 del_membs = set(mapped_groups[self.group_to_ldap_group(r[0], group_map)] 
                     for r in del_results)
                 del del_results
@@ -393,29 +346,10 @@ class LDAPProvisioner(object):
                         "Applied changes to LDAP subject '{subject_id}'.",
                         event_type='ldap_user_change',
                         subject_id=subject_id)
-            sql = """DELETE FROM groups;"""
-            try:
-                yield dbpool.runOperation(sql)
-            except Exception as ex:
-                log.error(
-                    'DB Error: sql="{sql}", error="{error}")',
-                    error=ex,
-                    sql=sql)
-                raise
-            log.debug("Dropped all rows from table `groups`.", event_type='db_drop_groups')
-            sql = """DELETE FROM member_ops;"""
-            try:
-                yield dbpool.runOperation(sql)
-            except Exception as ex:
-                log.error(
-                    'DB Error: sql="{sql}", error="{error}")',
-                    error=ex,
-                    sql=sql)
-                raise
-            log.debug("Dropped all rows from table `member_ops`.", event_type='db_drop_memb_ops')
-        except Exception as ex:
-            log.error("Error processing intake: {error}", error=ex)
-            raise
+            sql = "DELETE FROM groups;"
+            yield self.runDBCommand(sql, is_query=False)
+            sql = "DELETE FROM member_ops;"
+            yield self.runDBCommand(sql, is_query=False)
         finally:
             client.unbind()
                 
@@ -430,21 +364,13 @@ class LDAPProvisioner(object):
         Ref: https://www.sqlite.org/autoinc.html
         """
         log = self.log
-        dbpool = self.dbpool
         sql = dedent("""\
             SELECT rowid, grp, member, op
             FROM intake
             ORDER BY rowid ASC
             ;
             """)
-        try:
-            intake = yield dbpool.runQuery(sql)
-        except Exception as ex:
-            log.error(
-                "DB Error: sql={sql} error={error}",
-                sql=sql,
-                error=ex)
-            raise
+        intake = yield self.runDBCommand(sql)
         for rowid, group, member, action in intake:
             groupid = yield self.get_group_id(group)
             sql = dedent("""\
@@ -454,52 +380,16 @@ class LDAPProvisioner(object):
                 AND member = ?
                 ;
                 """)
-            try:
-                results = yield dbpool.runQuery(sql, [groupid, member])
-            except Exception as ex:
-                log.error(
-                    "DB Error: groupid={groupid}, member={member}, sql={sql} error={error}",
-                    sql=sql,
-                    error=ex,
-                    groupid=groupid,
-                    member=member)
-                raise
+            results = yield self.runDBCommand(sql, [groupid, member])
             if len(results) == 0:
-                sql = """INSERT INTO member_ops(op, member, grp) VALUES(?, ?, ?);"""
-                try:
-                    yield dbpool.runOperation(sql, [action, member, groupid])
-                except Exception as ex:
-                    log.error(
-                        "DB Error: action={action}, member={member}, groupid={groupid}, sql={sql} error={error}",
-                        sql=sql,
-                        error=ex,
-                        action=action,
-                        member=member,
-                        groupid=groupid)
-                    raise
+                sql = "INSERT INTO member_ops(op, member, grp) VALUES(?, ?, ?);"
+                yield self.runDBCommand(sql, [action, member, groupid], is_query=False)
             else:
                 result = results[0]
-                sql = """UPDATE member_ops SET op = ? WHERE grp=? AND member=?;"""
-                try:
-                    yield dbpool.runOperation(sql, [action, groupid, member])
-                except Exception as ex:
-                    log.error(
-                        "DB Error: action={action}, member={member}, groupid={groupid}, sql={sql} error={error}",
-                        sql=sql,
-                        error=ex,
-                        action=action,
-                        member=member,
-                        groupid=groupid)
-                    raise
-            sql = """DELETE FROM intake WHERE rowid = ? ;"""
-            try:
-                yield dbpool.runOperation(sql, [rowid])
-            except Exception as ex:
-                log.error(
-                    "DB Error: sql={sql} error={error}",
-                    sql=sql,
-                    error=ex)
-                raise
+                sql = "UPDATE member_ops SET op = ? WHERE grp=? AND member=?;"
+                yield self.runDBCommand(sql, [action, groupid, member], is_query=False)
+            sql = "DELETE FROM intake WHERE rowid = ? ;"
+            yield self.runDBCommand(sql, [rowid], is_query=False)
 
     @inlineCallbacks 
     def apply_changes_to_ldap_group(self, group, adds, deletes, client):
@@ -604,15 +494,15 @@ class LDAPProvisioner(object):
     @inlineCallbacks        
     def get_group_id(self, group):
         dbpool = self.dbpool
-        sql = """SELECT rowid FROM groups WHERE grp = ?;"""
-        result = yield dbpool.runQuery(sql, [group])
+        sql = "SELECT rowid FROM groups WHERE grp = ?;"
+        result = yield self.runDBCommand(sql, [group])
 
         def interaction(txn, sql, group):
             txn.execute(sql, [group])
             return txn.lastrowid
 
         if result is None or len(result) == 0:
-            sql = """INSERT INTO groups (grp) VALUES (?);"""
+            sql = "INSERT INTO groups (grp) VALUES (?);"
             group_id = yield dbpool.runInteraction(interaction, sql, group)
             returnValue(group_id)
         else:
@@ -620,11 +510,11 @@ class LDAPProvisioner(object):
 
     @inlineCallbacks
     def add_action_to_intake(self, group, action, member):
-        dbpool = self.dbpool
-        sql = """INSERT INTO intake(grp, member, op) VALUES(?, ?, ?);"""
-        yield dbpool.runOperation(sql, [group, member, action])
+        sql = "INSERT INTO intake(grp, member, op) VALUES(?, ?, ?);"
+        yield self.runDBCommand(sql, [group, member, action], is_query=False)
         self.log.debug(
             "Added provision request to intake: group={group}, subject={subject}, action={action}",
+            event_type='request_to_intake',
             group=group,
             subject=member,
             action=action)

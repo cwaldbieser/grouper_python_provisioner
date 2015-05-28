@@ -10,7 +10,7 @@ def wrap_observer(observer):
         new_event = {}
         new_event.update(event)
         new_event['level'] = event['log_level'].name.upper()
-        new_event['log_format'] = 'level="{{level}}" msg="{0}"'.format(event['log_format'])
+        new_event['log_format'] = '[{{level}}] {0}'.format(event['log_format'])
         return observer(new_event)
 
     return observeit
