@@ -1,12 +1,10 @@
 
-import ldap
-import ldap.dn
-import ldap.modlist
-from ldap.filter import escape_filter_chars as escape_fltr
+from ldaptor.protocols.ldap import ldapclient, ldapsyntax, ldapconnector
+from ldaptor.protocols import pureldap
 from twisted.plugin import IPlugin
 from zope.interface import implements
 from twisted.enterprise import adbapi
-from twisted.internet.defer import inlineCallbacks
+from twisted.internet.defer import inlineCallbacks, returnValue
 from twisted.internet import reactor, task, threads
 from twisted.internet.task import LoopingCall
 from twisted.logger import Logger
@@ -19,6 +17,7 @@ import os.path
 from textwrap import dedent
 from config import load_config, section2dict
 from logging import make_syslog_observer
+import urlparse
 
 class LDAPProvisionerFactory(object):
     implements(IPlugin, IProvisionerFactory)
@@ -26,6 +25,8 @@ class LDAPProvisionerFactory(object):
     tag = "ldap"
     opt_help = "Provisions an LDAP DIT with group membership changes."
     opt_usage = "This plugin does not support any options."
+    subject_id_attribute = 'uid'
+    group_id_attribute = 'cn'
 
     def generateProvisioner(self, argstring=""):
         """
@@ -53,20 +54,41 @@ class LDAPProvisioner(object):
                 log_level, 
                 prefix=syslog_prefix))
         self.log = log
+        log.debug("Initialized logging for LDAP provisioner.")
         group_map = load_group_map(config['group_map'])
+        log.debug("Loaded group map for LDAP provisioner.")
         self.group_map = group_map
         base_dn = config.get('base_dn', None)
         if base_dn is None:
             log.error("Must provide option `PROVISIONER.base_dn`.")
             sys.exit(1)
-        provision_user = bool(config.get('provision_user', False))
-        provision_group = bool(config.get('provision_group', False))
+        self.base_dn = base_dn
+        self.group_attribute = config['group_attribute']
+        self.user_attribute = config['user_attribute']
+        ldap_url = config['url']
+        p = urlparse.urlparse(ldap_url)
+        netloc = p.netloc
+        host_port = netloc.split(':', 1)
+        self.ldap_host = host_port[0]
+        if len(host_port) > 1:
+            self.ldap_port = int(host_port[1])
+        else:
+            self.ldap_port = 389
+        log.debug(
+            "LDAP host: {ldap_host}, LDAP port: {ldap_port}", 
+            ldap_host=self.ldap_host,
+            ldap_port=self.ldap_port)
+        self.start_tls = bool(int(config.get('start_tls', 0)))
+        provision_user = bool(int(config.get('provision_user', 0)))
+        provision_group = bool(int(config.get('provision_group', 0)))
         if (not provision_user) and (not provision_group):
             log.error("Must provision enable at least one of 'PROVISIONER.provision_user' or `PROVISIONER.provision_group`.")
             sys.exit(1) 
-        self.batch_time = config['batch_interval']
+        self.provision_user = provision_user
+        self.provision_group = provision_group
+        self.batch_time = int(config['batch_interval'])
         db_str = config['sqlite_db']
-        self.dbpool = adbapi.ConnectionPool("sqlite3", db_str)
+        self.dbpool = adbapi.ConnectionPool("sqlite3", db_str, check_same_thread=False)
         yield self.init_db
         processor = LoopingCall(self.process_requests)
         processor.start(self.batch_time)
@@ -127,15 +149,12 @@ class LDAPProvisioner(object):
 
     def provision(self, group, subject, action):
         db_str = self.config['sqlite_db']
-        d = add_action_to_intake(group, action, subject)
+        d = yield self.add_action_to_intake(group, action, subject)
 
     def process_requests(self):
         log = self.log
         log.debug("LDAP provisioner processing queued requests ...")
         service_state = self.service_state
-        db_str = self.config['sqlite_db']
-        ldap_info = self.config
-        group_map = self.group_map
 
         def set_last_update(result, service_state):
             """
@@ -159,18 +178,27 @@ class LDAPProvisioner(object):
         
     @inlineCallbacks
     def provision_ldap(self):
+        log = self.log
         group_map = self.group_map
-        ldap_info = self.config
+        config = self.config
         dbpool = self.dbpool
-
         # Transfer intake table to normalized batch tables.
-        self.transfer_intake_to_batch(db)
+        yield self.transfer_intake_to_batch()
         # Process the normalized batch.
-        base_dn = ldap_info['base_dn']
-        with self.connect_to_directory(ldap_info['url']) as lconn:
-            lconn.start_tls_s()
-            lconn.simple_bind(ldap_info['bind_dn'], ldap_info['passwd'])
-        
+        base_dn = config['base_dn']
+        start_tls = self.start_tls
+        ldap_host = self.ldap_host
+        ldap_port = self.ldap_port
+        bind_dn = config.get('bind_dn', None)
+        bind_passwd = config.get('passwd', None)
+        c = ldapconnector.LDAPClientCreator(reactor, ldapclient.LDAPClient)
+        overrides = {base_dn: (ldap_host, ldap_port)}
+        client = yield c.connect(base_dn, overrides=overrides)
+        try:
+            if start_tls:
+                yield client.startTLS()
+            if bind_dn and bind_passwd:
+                yield client.bind(bind_dn, bind_passwd)
             group_sql = """SELECT rowid, grp FROM groups ORDER BY grp ASC;"""
             memb_add_sql = """SELECT member FROM member_ops WHERE grp = ? AND op = 'addMembership' ORDER BY member ASC;""" 
             memb_del_sql = """SELECT member FROM member_ops WHERE grp = ? AND op = 'deleteMembership' ORDER BY member ASC;""" 
@@ -195,58 +223,45 @@ class LDAPProvisioner(object):
                 ORDER BY groups.grp ASC
                 ;
                 """)
-            c = db.cursor()
-            c.execute(group_sql)
+            results = yield dbpool.runQuery(group_sql)
             mapped_groups = {}
-            for groupid, group in list(fetch_batch(c)):
+            for groupid, group in results:
                 ldap_group = self.group_to_ldap_group(group, group_map)
                 if ldap_group is None:
-                    #print "[DEBUG] Group '{group}' is not a target group.  Skipping ...".format(group=ldap_group)
-                    c = db.cursor()
-                    c.execute("""DELETE FROM member_ops WHERE grp = ?;""", [groupid])
-                    c = db.cursor()
-                    c.execute("""DELETE FROM groups WHERE grp = ?;""", [group])
-                    db.commit()
+                    log.debug("Group '{group}' is not a target group.  Skipping ...", group=ldap_group)
+                    yield dbpool.runOperation("""DELETE FROM member_ops WHERE grp = ?;""", [groupid])
+                    yield dbpool.runOperation("""DELETE FROM groups WHERE grp = ?;""", [group])
                     continue
-                c = db.cursor()
-                c.execute(memb_add_sql, [groupid])
-                add_membs = set([r[0] for r in list(fetch_batch(c))])
-                c = db.cursor()
-                c.execute(memb_del_sql, [groupid])
-                del_membs = set([r[0] for r in list(fetch_batch(c))])
+                results = yield dbpool.runQuery(memb_add_sql, [groupid])
+                add_membs = set([r[0] for r in results])
+                results = yield dbpool.runQuery(memb_del_sql, [groupid])
+                del_membs = set([r[0] for r in results])
                 if len(add_membs) > 0 or len(del_membs) > 0:
-                    #print "[DEBUG] Applying changes to group {group} ...".format(group=ldap_group)
-                    #print "- Adds -"
-                    #print '\n  '.join(sorted(add_membs))
-                    #print "- Deletes -"
-                    #print '\n  '.join(sorted(del_membs))
-                    group_dn = self.apply_changes_to_ldap_group(ldap_group, add_membs, del_membs, base_dn, lconn, ldap_info)
+                    log.debug("Applying changes to group {group} ...", group=ldap_group)
+                    group_dn = yield self.apply_changes_to_ldap_group(
+                        ldap_group, add_membs, del_membs, client)
                     mapped_groups[ldap_group] = group_dn
-            c = db.cursor()
-            c.execute(subj_sql)
-            for subject_id in list(r[0] for r in fetch_batch(c)): 
-                c = db.cursor()
-                c.execute(subj_add_sql, [subject_id])
-                add_membs = set(mapped_groups[self.group_to_ldap_group(r[0], group_map)] for r in fetch_batch(c))
-                c = db.cursor()
-                c.execute(subj_del_sql, [subject_id])
-                del_membs = set(mapped_groups[self.group_to_ldap_group(r[0], group_map)] for r in fetch_batch(c))
+            results = yield dbpool.runQuery(subj_sql)
+            for subject_id in results: 
+                add_results = yield dbpool.runQuery(subj_add_sql, [subject_id])
+                add_membs = set(mapped_groups[self.group_to_ldap_group(r[0], group_map)] 
+                    for r in add_results)
+                del_results = yield dbpool.runQuery(subj_del_sql, [subject_id])
+                del_membs = set(mapped_groups[self.group_to_ldap_group(r[0], group_map)] 
+                    for r in fetch_batch(c))
                 if len(add_membs) > 0 or len(del_membs) > 0:
-                    #print "[DEBUG] Applying changes to subject {subject} ...".format(subject=subject_id)
-                    #print "- Adds -"
-                    #print '\n  '.join(sorted(add_membs))
-                    #print "- Deletes -"
-                    #print '\n  '.join(sorted(del_membs))
-                    
-                    self.apply_changes_to_ldap_subj(subject_id, add_membs, del_membs, base_dn, lconn, ldap_info)
+                    log.debug(
+                        "Applying changes to subject {subject} ...",
+                        subject=subject_id)
+                    yield self.apply_changes_to_ldap_subj(
+                        subject_id, add_membs, del_membs, client)
                 
             sql = """DELETE FROM groups;"""
-            c = db.cursor()
-            c.execute(sql)
+            yield dbpool.runOperation(sql)
             sql = """DELETE FROM member_ops;"""
-            c = db.cursor()
-            c.execute(sql)
-            db.commit()
+            yield dbpool.runOperation(sql)
+        finally:
+            client.unbind()
                 
     @inlineCallbacks
     def transfer_intake_to_batch(self):
@@ -267,7 +282,7 @@ class LDAPProvisioner(object):
             """)
         intake = yield dbpool.runQuery(sql)
         for rowid, group, member, action in intake:
-            groupid = self.get_group_id(group, db)
+            groupid = self.get_group_id(group)
             sql = dedent("""\
                 SELECT op, member
                 FROM member_ops 
@@ -275,37 +290,32 @@ class LDAPProvisioner(object):
                 AND member = ?
                 ;
                 """)
-            c = db.cursor()
-            c.execute(sql, [groupid, member])
-            result = c.fetchone()
-            if result is None:
+            results = yield dbpool.runQuery(sql, [groupid, member])
+            if len(results) == 0:
                 sql = """INSERT INTO member_ops(op, member, grp) VALUES(?, ?, ?);"""
-                c = db.cursor()
-                c.execute(sql, [action, member, groupid])
+                yield dbpool.runOperation(sql, [action, member, groupid])
             else:
+                result = results[0]
                 sql = """UPDATE member_ops SET op = ? WHERE grp=? AND member=?;"""
-                c = db.cursor()
-                c.execute(sql, [action, groupid, member])
+                yield dbpool.runOperation(sql, [action, groupid, member])
             sql = """DELETE FROM intake WHERE rowid = ? ;"""
-            c = db.cursor()
-            c.execute(sql, [rowid])
-            db.commit()
-                
-        #print "[DEBUG] Action has been batched."
+            yield dbpool.runOperation(sql, [rowid])
 
-    @contextlib.contextmanager
-    def connect_to_directory(self, url):
-        conn = ldap.initialize(url)
-        yield conn
-        conn.unbind()
-                
-    def apply_changes_to_ldap_group(self, group, adds, deletes, base_dn, conn, ldap_info):
-        provision_group = bool(ldap_info.get('provision_group', False))
+    @inlineCallbacks 
+    def apply_changes_to_ldap_group(self, group, adds, deletes, client):
+        subject_id_attribute = self.subject_id_attribute
+        base_dn = self.base_dn
+        group_attribute = self.group_attribute
+        provision_group = self.provision_group
         empty_dn = ldap_info.get("empty_dn", None)
-        fq_adds = set(x[1] for x in self.load_subject_dns(adds, base_dn, conn))
-        fq_deletes = set(x[1] for x in self.load_subject_dns(deletes, base_dn, conn))
-        group_dn, attribs = self.lookup_group(group, base_dn, conn) 
-        memb_set = set([m.lower() for m in attribs['member']])
+        results = yield self.load_subject(adds, client, attribs=[subject_id_attribute])
+        fq_adds = set(x[1].dn.lower() for x in results)
+        results = yield self.load_subject(deletes, client, attribs=[subject_id_attribute])
+        fq_deletes = set(x[1].dn.lower() for x in results)
+        group_entry = yield self.lookup_group(group, client) 
+        if group_entry is None:
+            returnValue(None) 
+        memb_set = set([m.lower() for m in group_entry[group_attribute]])
         memb_set = memb_set.union(fq_adds)
         memb_set = memb_set - fq_deletes
         if empty_dn is not None:
@@ -316,69 +326,79 @@ class LDAPProvisioner(object):
         members = list(memb_set)
         members.sort()
         if provision_group:
-            new_attribs = dict(member=members)
-            ml = ldap.modlist.modifyModlist(attribs, new_attribs)
             try:
-                conn.modify_s(group_dn, ml)
-            except ldap.LDAPError as ex:
-                self.log.error("Error while attempting to modify LDAP group: {0}".format(group_dn)) 
+                group_entry[group_attribute] = members
+                yield group_entry.commit()
+            except Exception as ex:
+                self.log.error("Error while attempting to modify LDAP group: {group}", group=group_dn) 
                 raise
-        return group_dn.lower()
-        
-    def apply_changes_to_ldap_subj(self, subject_id, fq_adds, fq_deletes, base_dn, conn, ldap_info):
-        provision_user = bool(ldap_info.get('provision_user', False))
-        user_attribute = ldap_info['user_attribute']
-        subj_dns = list(self.load_subject_dns([subject_id], base_dn, conn))
-        if len(subj_dns) == 0:
-            self.log.warn("No DN found for subject ID '{0}.  Skipping ...'".format(subject_id))
-            return
-        assert not len(subj_dns) > 1, "Multiple DNs found for subject ID '{0}'".format(subject_id)
-        subj_dn = subj_dns[0][1]
-        membs = self.load_subject_memberships(subj_dn, conn)
+        returnValue(group_enty.dn.lower())
+       
+    @inlineCallbacks 
+    def apply_changes_to_ldap_subj(self, subject_id, fq_adds, fq_deletes, client):
+        provision_user = self.provision_user
+        if not provision_user:
+            returnValue(None)
+        base_dn = self.base_dn
+        user_attribute = self.user_attribute
+        subjects = yield self.load_subjects([subject_id], client, attribs=[user_attribute])
+        if len(subjects) == 0:
+            self.log.warn(
+                "No DN found for subject ID '{subject_id}.  Skipping ...'",
+                subject_id=subject_id)
+            returValue(None)
+        assert not len(subjects) > 1, "Multiple DNs found for subject ID '{0}'".format(subject_id)
+        subject_entry = subjects[0]
+        membs = subject_entry[user_attribute]
         memb_set = set([m.lower() for m in membs])
         memb_set = memb_set.union(fq_adds)
         memb_set = memb_set - fq_deletes
         members = list(memb_set)
         members.sort()
-        attribs = {user_attribute: membs}
-        if provision_user:
-            new_attribs = {user_attribute: members}
-            ml = ldap.modlist.modifyModlist(attribs, new_attribs)
-            try:
-                conn.modify_s(subj_dn, ml)
-            except ldap.LDAPError as ex:
-                self.log.error("Error while attempting to modify LDAP subject: {0}".format(subj_dn)) 
-                raise
-        
-    def load_subject_dns(self, subject_ids, base_dn, conn):
+        try:
+            subject_entry[user_attribute] = members
+            yield subject_entry.commit()    
+        except ldap.LDAPError as ex:
+            self.log.error("Error while attempting to modify LDAP subject: {0}".format(subj_dn)) 
+            raise
+       
+    @inlineCallbacks 
+    def load_subjects(self, subject_ids, client, attribs=()):
+        base_dn = self.base_dn
+        rval = []
         for subject_id in subject_ids:
-            fltr = "cn={0}".format(escape_fltr(subject_id))
+            fltr = "uid={0}".format(escape_filter_chars(subject_id))
+            o = ldapsyntax.LDAPEntry(client, base_dn)
             try:
-                results = conn.search_s(base_dn, ldap.SCOPE_SUBTREE, fltr, attrlist=['cn']) 
-            except ldap.LDAPError as ex:
-                self.log.error("Error while searching for LDAP subject: {0}".format(subject_id)) 
+                results = yield o.search(filterText=query, attributes=attribs) 
+            except Exception as ex:
+                self.log.error(
+                    "Error while searching for LDAP subject: {subject_id}", 
+                    subject_id=subject_id) 
                 raise
             for result in results:
-                yield (subject_id, result[0].lower())
+                rval.append((subject_id, result))
+        returnValue(rval)
 
-    def lookup_group(self, group_name, base_dn, conn, group_attrib='member'):
-        fltr = "cn={0}".format(escape_fltr(group_name))
+    @inlineCallbacks
+    def lookup_group(self, group_name, client):
+        group_id_attribute = self.group_id_attribute
+        base_dn = self.base_dn
+        group_attrib = self.group_attribute
+        fltr = "{0}={1}".format(group_id_attribute, escape_filter_chars(group_name))
+        o = ldapsyntax.LDAPEntry(client, base_dn)
         try:
-            results = conn.search_s(base_dn, ldap.SCOPE_SUBTREE, fltr, attrlist=[group_attrib]) 
-        except ldap.LDAPError as ex:
-            self.log.error("Error while searching for LDAP group: {0}".format(group_name)) 
+            results = yield o.search(filterText=fltr, attributes=[group_attrib]) 
+        except Exception as ex:
+            self.log.error(
+                "Error while searching for LDAP group: {group}",
+                group=group_name) 
             raise
-        assert len(results) > 0, "Could not find group, '{0}'.".format(group_name)
-        return results[0]
-
-    def load_subject_memberships(self, dn, conn, user_attrib='memberOf'):
-        try:
-            results = conn.search_s(dn, ldap.SCOPE_BASE, attrlist=[user_attrib]) 
-        except ldap.LDAPError as ex:
-            self.log.error("Error while fetching memberships for LDAP subject: {0}".format(dn)) 
-            raise
-        result = results[0]
-        return result[1].get(user_attrib, [])
+        if len(results) == 0:
+            self.log.warn("Could not find group, '{group}'.", group=group_name)
+            returnValue(None)
+        else:
+            returnValue(results[0])
 
     @inlineCallbacks        
     def get_group_id(self, group):
@@ -389,7 +409,7 @@ class LDAPProvisioner(object):
             sql = """INSERT INTO groups (grp) VALUES (?);"""
             yield dbpool.runOperation(sql, [group])
             group_id = dbpool.lastrowid
-            return group_id
+            returnValue(group_id)
         else:
             returnValue(result[0])
 
@@ -405,16 +425,36 @@ def load_group_map(gm):
         o = load(f)
     return o
         
-def fetch_batch(cursor, batch_size=None, **kwds):
+def escape_filter_chars(assertion_value,escape_mode=0):
     """
-    Generator fetches batches of rows from the database cursor.
+    This function shamelessly copied from python-ldap module.
+    
+    Replace all special characters found in assertion_value
+    by quoted notation.
+
+    escape_mode
+      If 0 only special chars mentioned in RFC 2254 are escaped.
+      If 1 all NON-ASCII chars are escaped.
+      If 2 all chars are escaped.
     """
-    if batch_size is None:
-        batch_size = cursor.arraysize
-    while True:
-        rows = cursor.fetchmany(batch_size)
-        if len(rows) == 0:
-            break
-        for row in rows:
-            yield row
+    if escape_mode:
+        r = []
+        if escape_mode==1:
+            for c in assertion_value:
+                if c < '0' or c > 'z' or c in "\\*()":
+                    c = "\\%02x" % ord(c)
+                r.append(c)
+        elif escape_mode==2:
+            for c in assertion_value:
+                r.append("\\%02x" % ord(c))
+        else:
+          raise ValueError('escape_mode must be 0, 1 or 2.')
+        s = ''.join(r)
+    else:
+        s = assertion_value.replace('\\', r'\5c')
+        s = s.replace(r'*', r'\2a')
+        s = s.replace(r'(', r'\28')
+        s = s.replace(r')', r'\29')
+        s = s.replace('\x00', r'\00')
+    return s
 
