@@ -106,7 +106,17 @@ class LDAPProvisioner(object):
         self.batch_time = int(config['batch_interval'])
         db_str = config['sqlite_db']
         self.dbpool = adbapi.ConnectionPool("sqlite3", db_str, check_same_thread=False)
-        yield self.init_db
+        log.debug("Initializing database ...",
+            event_type='before_init_db')
+        try:
+            yield self.dbpool.runInteraction(self.init_db)
+        except Exception as ex:
+            log.error("Error initializing database: {error}",
+                event_type='db_error',
+                error=ex)
+        else:
+            log.debug("Database initialized ...",
+                event_type='after_init_db')
         processor = LoopingCall(self.process_requests)
         processor.start(self.batch_time)
         self.processor = processor
@@ -163,8 +173,7 @@ class LDAPProvisioner(object):
         log.debug(msg, cmd=cmd_str, result_count=result_count) 
         returnValue(results)
 
-    @inlineCallbacks
-    def init_db(self):
+    def init_db(self, txn):
         commands = []
         sql = dedent("""\
             CREATE TABLE intake(
@@ -194,7 +203,7 @@ class LDAPProvisioner(object):
         commands.append(sql)
         for sql in commands:
             try:
-                yield self.runDBCommand(sql, is_query=False)
+                txn.execute(sql)
             except sqlite3.OperationalError as ex:
                 if not str(ex).endswith(" already exists"):
                     raise
