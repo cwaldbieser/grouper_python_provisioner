@@ -1,4 +1,5 @@
 
+from jinja2 import Template
 from ldaptor.protocols import pureldap
 from ldaptor.protocols.ldap import ldapclient, ldapsyntax, ldapconnector
 from ldaptor.protocols.ldap.distinguishedname import DistinguishedName, RelativeDistinguishedName
@@ -47,7 +48,7 @@ class LDAPProvisioner(object):
     config = None
     batch_time = 10
     subject_id_attribute = 'uid'
-    group_id_attribute = 'cn'
+    group_attrib_type = 'cn'
 
     @inlineCallbacks
     def load_config(self, config_file=None, default_log_level='info', syslog_prefix=None):
@@ -268,7 +269,8 @@ class LDAPProvisioner(object):
                 stem=stem)
             result = stem_map.get(stem, None)
             if result is not None:
-                ldap_group = result['template'].format(group=group_only)
+                template = Template(result['template'])
+                ldap_group = template.render(group=group_only, stem=stem, fqgroup=g)
                 create_group = result['create_group']
                 create_context = result.get('create_context', None)
                 log.debug(
@@ -441,6 +443,7 @@ class LDAPProvisioner(object):
         group_attribute = self.group_attribute
         provision_group = self.provision_group
         empty_dn = config.get("empty_dn", None)
+        group_attrib_type = self.group_attrib_type
         results = yield self.load_subjects(adds, client, attribs=[subject_id_attribute])
         fq_adds = set(str(x[1].dn).lower() for x in results)
         results = yield self.load_subjects(deletes, client, attribs=[subject_id_attribute])
@@ -475,7 +478,7 @@ class LDAPProvisioner(object):
                 attribs = {
                     'objectClass': ['top', 'groupOfNames'],
                     'member': members}
-                rdn = RelativeDistinguishedName("cn={0}".format(target.group))
+                rdn = RelativeDistinguishedName("{0}={1}".format(group_attrib_type, target.group))
                 try:
                     group_entry = yield o.addChild(rdn, attribs)
                 except Exception as ex:
@@ -551,10 +554,10 @@ class LDAPProvisioner(object):
 
     @inlineCallbacks
     def lookup_group(self, group_name, client):
-        group_id_attribute = self.group_id_attribute
+        group_attrib_type = self.group_attrib_type
         base_dn = self.base_dn
         group_attrib = self.group_attribute
-        fltr = "({0}={1})".format(group_id_attribute, escape_filter_chars(group_name))
+        fltr = "({0}={1})".format(group_attrib_type, escape_filter_chars(group_name))
         o = ldapsyntax.LDAPEntry(client, base_dn)
         try:
             results = yield o.search(filterText=fltr, attributes=[group_attrib]) 
