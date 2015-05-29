@@ -1,6 +1,8 @@
 
-from ldaptor.protocols.ldap import ldapclient, ldapsyntax, ldapconnector
 from ldaptor.protocols import pureldap
+from ldaptor.protocols.ldap import ldapclient, ldapsyntax, ldapconnector
+from ldaptor.protocols.ldap.distinguishedname import DistinguishedName, RelativeDistinguishedName
+from ldaptor.protocols.ldap.distinguishedname import unescape as unescapeDN
 from twisted.plugin import IPlugin
 from zope.interface import implements
 from twisted.enterprise import adbapi
@@ -473,23 +475,26 @@ class LDAPProvisioner(object):
                 attribs = {
                     'objectClass': ['top', 'groupOfNames'],
                     'member': members}
-                rdn = "cn={0}".format(target.group) #TODO escape DN chars?
+                rdn = RelativeDistinguishedName("cn={0}".format(target.group))
                 try:
                     group_entry = yield o.addChild(rdn, attribs)
                 except Exception as ex:
                     log.error(
                         "Error while trying create LDAP group '{rdn},{ldap_context}'.",
                         event_type='ldap_error',
-                        rdn=rdn,
+                        rdn=str(rdn),
                         ldap_context=target.create_context)
                     raise
             try:
                 group_entry[group_attribute] = members
                 yield group_entry.commit()
             except Exception as ex:
-                log.error("Error while attempting to modify LDAP group: {group}", group=group_dn) 
+                log.error(
+                    "Error while attempting to modify LDAP group: {dn}", 
+                    event_type='ldap_error',
+                    dn=str(group_entry.dn)) 
                 raise
-        returnValue(str(group_entry.dn).lower())
+        returnValue(normalize_dn(group_entry.dn))
        
     @inlineCallbacks 
     def apply_changes_to_ldap_subj(self, subject_id, fq_adds, fq_deletes, client):
@@ -507,7 +512,7 @@ class LDAPProvisioner(object):
         assert not len(subjects) > 1, "Multiple DNs found for subject ID '{0}'".format(subject_id)
         subject_id, subject_entry = subjects[0]
         membs = subject_entry[user_attribute]
-        memb_set = set([m.lower() for m in membs])
+        memb_set = set([normalize_dn(DistinguishedName(m)) for m in membs])
         memb_set = memb_set.union(fq_adds)
         memb_set = memb_set - fq_deletes
         members = list(memb_set)
@@ -515,8 +520,12 @@ class LDAPProvisioner(object):
         try:
             subject_entry[user_attribute] = members
             yield subject_entry.commit()    
-        except ldap.LDAPError as ex:
-            self.log.error("Error while attempting to modify LDAP subject: {0}".format(subj_dn)) 
+        except Exception as ex:
+            self.log.error(
+                "Error while attempting to modify LDAP subject: dn={dn}, attribs={attribs}",
+                    event_type='ldap_error',
+                    dn=subject_entry.dn,
+                    attribs=subject_entry.items()) 
             raise
        
     @inlineCallbacks 
@@ -709,3 +718,5 @@ def escape_filter_chars(assertion_value,escape_mode=0):
         s = s.replace('\x00', r'\00')
     return s
 
+def normalize_dn(dn):
+    return DistinguishedName(tuple(RelativeDistinguishedName(str(r).lower()) for r in dn.listOfRDNs))
