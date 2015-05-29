@@ -19,6 +19,7 @@ from textwrap import dedent
 from config import load_config, section2dict
 from logging import make_syslog_observer
 import urlparse
+import sys
 
 LDAPGroupTarget = namedtuple("LDAPTargetGroup", ['group', 'create_group', 'create_context'])
 
@@ -236,6 +237,11 @@ class LDAPProvisioner(object):
         return d
     
     def group_to_ldap_group(self, g):
+        log = self.log
+        log.debug(
+            "Looking up group, '{group}' in groupmap ...",
+            event_type='groupmap_lookup',
+            group=g)
         group_map = self.group_map
         stem_map = self.stem_map
         result = group_map.get(g, None)
@@ -243,16 +249,31 @@ class LDAPProvisioner(object):
             ldap_group = result['group']
             create_group = result['create_group']
             create_context = result.get('create_context', None)
+            log.debug(
+                "Group '{group}' mapped to '{ldap_group}'",
+                event_type='groupmap_match',
+                group=g,
+                ldap_group=ldap_group) 
             return LDAPGroupTarget(ldap_group, create_group, create_context)
         else:
             parts = g.split(':')
             stem_parts = parts[:-1]
             stem = ':'.join(stem_parts) + ':'
+            group_only = parts[-1]
+            log.debug(
+                "Attempting to match stem, '{stem}' ...",
+                event_type='stemmap_lookup',
+                stem=stem)
             result = stem_map.get(stem, None)
             if result is not None:
-                ldap_group = result['template'].format(group=group)
+                ldap_group = result['template'].format(group=group_only)
                 create_group = result['create_group']
                 create_context = result.get('create_context', None)
+                log.debug(
+                    "Group '{group}' stem-mapped to '{ldap_group}'",
+                    event_type='groupmap_match',
+                    group=g,
+                    ldap_group=ldap_group) 
                 return LDAPGroupTarget(ldap_group, create_group, create_context)
             else:
                 return None 
@@ -448,11 +469,11 @@ class LDAPProvisioner(object):
         members.sort()
         if provision_group:
             if needs_create:
-                o = ldapsyntax.LDAPEntry(client, ldap_context)
+                o = ldapsyntax.LDAPEntry(client, target.create_context)
                 attribs = {
                     'objectClass': ['top', 'groupOfNames'],
                     'member': members}
-                rdn = "cn={0}".format(target_group) #TODO escape DN chars?
+                rdn = "cn={0}".format(target.group) #TODO escape DN chars?
                 try:
                     group_entry = yield o.addChild(rdn, attribs)
                 except Exception as ex:
@@ -460,7 +481,7 @@ class LDAPProvisioner(object):
                         "Error while trying create LDAP group '{rdn},{ldap_context}'.",
                         event_type='ldap_error',
                         rdn=rdn,
-                        ldap_context=ldap_context)
+                        ldap_context=target.create_context)
                     raise
             try:
                 group_entry[group_attribute] = members
@@ -649,6 +670,11 @@ class LDAPProvisioner(object):
                 stem_map[group] = props
             self.group_map = direct_map
             self.stem_map = stem_map
+            log.debug(
+                "Created group maps: group_map={group_map!r} stem_map={stem_map!r}",
+                event_type='groupmap_parsed',
+                group_map=direct_map,
+                stem_map=stem_map)
         
 def escape_filter_chars(assertion_value,escape_mode=0):
     """
