@@ -1,3 +1,8 @@
 {
-    "test:group": "test_group"
+    "test:nobz": "nobz",
+    "test:orkz:ldap_exports:": {
+        "template": "orkz_{{group|trim|lower}}",
+        "create_group"  : true,
+        "create_context": "ou=groups,dc=example,dc=org"
+    }
 }
