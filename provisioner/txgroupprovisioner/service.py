@@ -14,7 +14,7 @@ from twisted.application import service
 from twisted.application.service import Service
 from twisted.internet import reactor, task
 from twisted.internet.defer import inlineCallbacks
-from twisted.internet.endpoints import serverFromString
+from twisted.internet.endpoints import clientFromString, connectProtocol
 from twisted.internet.protocol import ClientCreator
 from twisted.logger import Logger
 from txamqp.client import TwistedDelegate
@@ -95,8 +95,7 @@ class GroupProvisionerService(Service):
 
     def start_amqp_client(self, amqp_info):
         log = self.amqp_log
-        host = amqp_info['host']
-        port = int(amqp_info['port'])
+        endpoint_str = amqp_info['endpoint']
         exchange = amqp_info['exchange']
         vhost = amqp_info['vhost']
         spec_path = amqp_info['spec']
@@ -109,20 +108,21 @@ class GroupProvisionerService(Service):
         queue_names = set([q for q, rk in bindings])
         queue_names.add(queue_name)
         log.debug(
-            "host='{host}', port={port}, exchange='{exchange}', vhost='{vhost}', user='{user}, spec={spec}'",
-            host=host, port=port, exchange=exchange, vhost=vhost, user=user, spec=spec_path)
+            "endpoint='{endpoint}', exchange='{exchange}', vhost='{vhost}', user='{user}, spec={spec}'",
+            endpoint=endpoint_str, exchange=exchange, vhost=vhost, user=user, spec=spec_path)
         for q in sorted(queue_names):
             log.debug("Declared: queue='{queue}'", queue=q)
         for q, rk in bindings:
             log.debug("Binding: queue='{queue}', route_key='{route_key}'", queue=q, route_key=rk)
         delegate = TwistedDelegate()
         spec = txamqp.spec.load(spec_path)
-        d = ClientCreator(
-            self._reactor, 
-            AMQClient, 
-            delegate=delegate, 
-            vhost=vhost, 
-            spec=spec).connectTCP(host, port)
+        ep = clientFromString(self._reactor, endpoint_str)
+        d = connectProtocol(
+            ep, 
+            AMQClient( 
+                delegate=delegate, 
+                vhost=vhost, 
+                spec=spec))
         d.addCallback(self.on_amqp_connect, exchange, queue_name, queue_names, bindings, creds)
 
         def onError(err):
@@ -214,8 +214,7 @@ class GroupProvisionerService(Service):
             
             [AMQP]
             log_level = INFO
-            host = localhost
-            port = 5672
+            endpoint = tcp:host=localhost:port=5672
             exchange = grouper_exchange
             vhost = /
             spec = {spec_path}

@@ -53,8 +53,11 @@ The configuration sections and options are below.
         * *ldap*(default): The LDAP provisioner backend
 * *AMQP*
     * **log_level**
-    * **host**
-    * **port**
+    * **endpoint**: Client endpoint connection string.
+      See https://twistedmatrix.com/documents/current/core/howto/endpoints.html#clients
+      Examples:
+        * tcp:host=localhost:port=5672
+        * ssl:host=localhost:port=5672:caCertsDir=/etc/ssl/certs
     * **exchange**: The service configures an exchange that will route
       messages to one or more queues.
     * **vhost**: The virtual host on the AMQP host to which this service connects.
