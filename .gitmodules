@@ -1,0 +1,3 @@
+[submodule "provisioner/txsshadmin"]
+	path = provisioner/txsshadmin
+	url = https://github.com/cwaldbieser/txsshadmin.git

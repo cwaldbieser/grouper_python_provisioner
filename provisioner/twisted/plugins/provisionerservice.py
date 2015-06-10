@@ -5,10 +5,11 @@ import argparse
 import sys
 # Application modules
 from txgroupprovisioner.service import GroupProvisionerService
+from txgroupprovisioner.admin import SSHAdminService
 
 # External modules
 from twisted.application import internet
-from twisted.application.service import IServiceMaker
+from twisted.application.service import IServiceMaker, MultiService
 from twisted.plugin import getPlugins, IPlugin
 from twisted.python import usage
 from zope.interface import implements
@@ -19,6 +20,8 @@ class Options(usage.Options):
         ["config", "c", None, 
             "Options in a specific configuration override options in any other "
             "configurations."],
+        ['ssh-endpoint', 'a', None, 
+            "Endpoint string for SSH admin interface.  E.g. 'tcp:2022'", None],    
     ]
 
 
@@ -45,6 +48,7 @@ class MyServiceMaker(object):
         Construct a server from a factory.
         """
         config = options['config']
+        ssh_endpoint_str = options['ssh-endpoint']
         # Parse the original `twistd` command line for logging options.
         parser = argparse.ArgumentParser("twistd argument parser")
         parser.add_argument(
@@ -60,11 +64,20 @@ class MyServiceMaker(object):
             default='twisted')
         args, unknown = parser.parse_known_args()
         # Create the service.
-        return GroupProvisionerService(
+        service = GroupProvisionerService(
             config=config, 
             use_syslog=args.syslog, 
             syslog_prefix=args.prefix,
             logfile=args.logfile)
+        if ssh_endpoint_str is None:
+            rootService = service
+        else:
+            rootService = MultiService()
+            service.setServiceParent(rootService)
+            service = SSHAdminService()
+            service.endpointStr = ssh_endpoint_str
+            service.setServiceParent(rootService)
+        return rootService
 
 
 # Now construct an object which *provides* the relevant interfaces

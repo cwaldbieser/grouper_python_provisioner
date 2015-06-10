@@ -6,3 +6,4 @@
 *.pid
 twisted/plugins/dropin.cache
 pyenv/
+keys/
