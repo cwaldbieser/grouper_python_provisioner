@@ -20,8 +20,10 @@ class Options(usage.Options):
         ["config", "c", None, 
             "Options in a specific configuration override options in any other "
             "configurations."],
-        ['ssh-endpoint', 'a', None, 
-            "Endpoint string for SSH admin interface.  E.g. 'tcp:2022'", None],    
+        ['ssh-endpoint', 's', None, 
+            "Endpoint string for SSH admin interface.  E.g. 'tcp:2022'"],    
+        ['admin-group', 'a', 'txgroupadmins', 
+            "Administrative access group.  Default 'txgroupadmins'"],    
     ]
 
 
@@ -49,6 +51,7 @@ class MyServiceMaker(object):
         """
         config = options['config']
         ssh_endpoint_str = options['ssh-endpoint']
+        admin_group = options['admin-group']
         # Parse the original `twistd` command line for logging options.
         parser = argparse.ArgumentParser("twistd argument parser")
         parser.add_argument(
@@ -76,6 +79,7 @@ class MyServiceMaker(object):
             service.setServiceParent(rootService)
             service = SSHAdminService()
             service.endpointStr = ssh_endpoint_str
+            service.realm.adminGroup = admin_group
             service.setServiceParent(rootService)
         return rootService
 
