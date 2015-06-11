@@ -21,8 +21,9 @@ import os.path
 from textwrap import dedent
 from config import load_config, section2dict
 from logging import make_syslog_observer
-import urlparse
+import sqlite3
 import sys
+import urlparse
 
 LDAPGroupTarget = namedtuple("LDAPTargetGroup", ['group', 'create_group', 'create_context'])
 

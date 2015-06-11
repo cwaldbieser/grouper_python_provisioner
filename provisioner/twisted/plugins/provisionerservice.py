@@ -67,20 +67,21 @@ class MyServiceMaker(object):
             default='twisted')
         args, unknown = parser.parse_known_args()
         # Create the service.
-        service = GroupProvisionerService(
+        groupService = GroupProvisionerService(
             config=config, 
             use_syslog=args.syslog, 
             syslog_prefix=args.prefix,
             logfile=args.logfile)
         if ssh_endpoint_str is None:
-            rootService = service
+            rootService = groupService
         else:
             rootService = MultiService()
-            service.setServiceParent(rootService)
-            service = SSHAdminService()
-            service.endpointStr = ssh_endpoint_str
-            service.realm.adminGroup = admin_group
-            service.setServiceParent(rootService)
+            groupService.setServiceParent(rootService)
+            sshService = SSHAdminService()
+            sshService.endpointStr = ssh_endpoint_str
+            sshService.realm.adminGroup = admin_group
+            sshService.realm.groupService = groupService
+            sshService.setServiceParent(rootService)
         return rootService
 
 
