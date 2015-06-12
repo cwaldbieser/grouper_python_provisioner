@@ -13,12 +13,13 @@ from textwrap import dedent
 from twisted.application import service
 from twisted.application.service import Service
 from twisted.internet import reactor, task
-from twisted.internet.defer import inlineCallbacks, DeferredList
+from twisted.internet.defer import inlineCallbacks, returnValue, DeferredList
 from twisted.internet.endpoints import clientFromString, connectProtocol
 from twisted.internet.protocol import ClientCreator
 from twisted.logger import Logger
 from txamqp.client import TwistedDelegate
 from txamqp.protocol import AMQClient
+from txamqp.queue import Closed as QueueClosedError
 import txamqp.spec
 # - application
 from config import load_config, section2dict
@@ -35,6 +36,7 @@ class ServiceState(object):
 
 class GroupProvisionerService(Service):
     log = None
+    consumerTag = "mytag"
 
     def __init__(
             self, 
@@ -71,15 +73,15 @@ class GroupProvisionerService(Service):
                 log_level, 
                 prefix=self.syslog_prefix))
         self.log = log
-        amqp_info = section2dict(scp, "AMQP")
-        amqp_log_level = amqp_info.get("log_level", log_level) 
+        self.amqp_info = section2dict(scp, "AMQP")
+        amqp_log_level = self.amqp_info.get("log_level", log_level) 
         self.amqp_log = Logger(
             observer=make_syslog_observer(
                 amqp_log_level, 
                 prefix=self.syslog_prefix))
         service_state = self.service_state 
         service_state.last_update = None
-        self.start_amqp_client(amqp_info)
+        self.start_amqp_client()
         provisioner_tag = app_info['provisioner']
         log.info("Provisioner tag => '{provisioner}'", provisioner=provisioner_tag)
         provisioner_factory = get_plugin_factory(provisioner_tag, IProvisionerFactory)
@@ -94,7 +96,8 @@ class GroupProvisionerService(Service):
             syslog_prefix=self.syslog_prefix)
         self.provisioner = provisioner
 
-    def start_amqp_client(self, amqp_info):
+    def start_amqp_client(self):
+        amqp_info = self.amqp_info
         log = self.amqp_log
         endpoint_str = amqp_info['endpoint']
         exchange = amqp_info['exchange']
@@ -132,7 +135,6 @@ class GroupProvisionerService(Service):
                 reactor.stop()
 
         d.addErrback(onError)
-        self.service_state.read_from_queue = True
 
     def parse_bindings(self, fname):
         """
@@ -164,26 +166,51 @@ class GroupProvisionerService(Service):
         for qname, route_key in bindings:
             yield channel.queue_bind(exchange=exchange, queue=qname, routing_key=route_key)
         log.info("Routings have been mapped.")
-        yield channel.basic_consume(queue=queue_name, consumer_tag="mytag")
-        queue = yield conn.queue("mytag") 
-        self.amqpQueue = queue
         self.createAMQPMessageLoop()
         self.startAMQPMessageLoop()
-
-    @inlineCallbacks
-    def startAMQPMessageLoop(self):
-        try:
-            yield self.amqpLooper.start(0)
-        except Exception as ex:
-            log.error("Error occured during AMQP message processing: {error}", error=ex)
-
-    def stopAMQPMessageLoop(self):
-        self.amqpLooper.stop()
 
     def createAMQPMessageLoop(self):
         log = self.amqp_log
         amqpLooper = task.LoopingCall(self.processAMQPMessage)
         self.amqpLooper = amqpLooper
+
+    def startAMQPMessageLoop(self):
+        if not self.service_state.read_from_queue: 
+            log = self.amqp_log
+            log.debug("Starting the AMQP message loop ...")
+            self.service_state.read_from_queue = True
+            d = self.startConsumingFromQueue()
+            def startLoop_(result):
+                try:
+                    self.amqpLooper.start(0)
+                except Exception as ex:
+                    log.error("An error occured during AMQP message processing: {error}", error=str(ex))
+                    raise
+
+            d.addCallback(startLoop_)
+
+    def stopAMQPMessageLoop(self):
+        if self.service_state.read_from_queue: 
+            log = self.amqp_log
+            self.amqpLooper.stop()
+            self.service_state.read_from_queue = False
+
+            def logStopped_(result):
+                log.debug("Stopped the AMQP message loop.")
+
+            d = self.amqpChannel.basic_cancel(consumer_tag=self.consumerTag)
+            d.addCallback(logStopped_)
+
+    @inlineCallbacks
+    def startConsumingFromQueue(self):
+        log = self.amqp_log
+        queue_name = self.amqp_info['queue']
+        channel = self.amqpChannel
+        conn = self.amqpConn
+        log.debug("AMQP: starting basic_consume() for queue '{0}' ...".format(queue_name))
+        yield channel.basic_consume(queue=queue_name, consumer_tag=self.consumerTag)
+        self.amqpQueue = yield conn.queue(self.consumerTag) 
+        log.debug("AMQP: basic_consume() started.")
 
     @inlineCallbacks
     def processAMQPMessage(self):
@@ -193,7 +220,15 @@ class GroupProvisionerService(Service):
         log = self.amqp_log
         provisioner = self.provisioner
         service_state = self.service_state
-        msg = yield queue.get()
+        log.debug("Attempting to read an AMQP message ...")
+        try:
+            msg = yield queue.get()
+        except QueueClosedError:
+            log.warn("Queue closed-- message not processed.")
+            returnValue(None) 
+        log.debug("checkpoint 0")
+        if not service_state.read_from_queue:
+            returnValue(None) 
         log.debug('Received: "{msg}" from channel # {channel}.', msg=msg.content.body, channel=channel.id)
         parts = msg.content.body.split("\n")
         try:
@@ -206,7 +241,7 @@ class GroupProvisionerService(Service):
             returnValue(None) 
         recorded = False
         delay = 0
-        while not recorded and service_state:
+        while not recorded and service_state.read_from_queue:
             try:
                 yield task.deferLater(reactor, delay, provisioner.provision, group, subject, action)
             except Exception as ex:
@@ -217,10 +252,6 @@ class GroupProvisionerService(Service):
                 delay = 0    
                 yield channel.basic_ack(delivery_tag=msg.delivery_tag)
                 log.debug("Message from queue recorded.")
-        if not recorded:
-            log.debug("Message was not recorded.  Issuing `basic_recover()` ...")
-            yield channel.basic_recover(requeue=True)
-            log.debug("Message was requed.")
         
     @inlineCallbacks
     def closeAMQPConnection(self):
@@ -248,6 +279,7 @@ class GroupProvisionerService(Service):
         """
         Stop the service.
         """
+        self.service_state.read_from_queue = False
         async_tasks = []
         if self._port is not None:
             async_tasks.append(self._port.stopListening())
