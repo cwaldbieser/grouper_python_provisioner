@@ -38,8 +38,13 @@ class DelegatingHandler(BaseHandler):
         Report on processing status.
         """ 
         terminal = dispatcher.terminal
-        running = self.avatar.groupService.service_state.read_from_queue
+        service_state = self.avatar.groupService.service_state
+        running = service_state.read_from_queue
         terminal.write("Processing messages: {0}".format(running))
+        terminal.nextLine()
+        last_update = service_state.last_update
+        terminal.write("Last successful provisioning attempt: {0}".format(
+            last_update.strftime("%Y-%m-%dT%H:%M:%S")))
         terminal.nextLine()
 
     def handle_shutdown(self, dispatcher):
