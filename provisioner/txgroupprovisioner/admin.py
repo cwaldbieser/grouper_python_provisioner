@@ -52,6 +52,29 @@ class DelegatingHandler(BaseHandler):
         from twisted.internet import reactor
         reactor.stop()
 
+    def handle_show_config(self, dispatcher):
+        """
+        Show the current configuration settings.
+        """
+        terminal = dispatcher.terminal
+        scp = self.avatar.groupService.scp
+        sections = scp.sections()
+        sections.sort()
+        terminal.write("## Current Settings ##")
+        terminal.nextLine()
+        for section in sections:
+            options = scp.options(section)
+            options.sort()
+            for option in options:
+                value = scp.get(section, option)
+                if 'passwd' in option or 'password' in option:
+                    value = '*******'
+                terminal.write("{section}.{option}: {value}".format(
+                    section=section,
+                    option=option,
+                    value=value))
+                terminal.nextLine()
+
 
 SSHDelegatingProtocolFactory = makeSSHDispatcherProtocolFactory(DelegatingHandler)
 
