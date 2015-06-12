@@ -66,6 +66,7 @@ class GroupProvisionerService(Service):
         """
         scp = load_config(
             config_file=self.config, defaults=self.make_config_defaults())
+        self.scp = scp
         app_info = section2dict(scp, "APPLICATION")
         log_level = app_info.get("log_level", "INFO")
         log = Logger(

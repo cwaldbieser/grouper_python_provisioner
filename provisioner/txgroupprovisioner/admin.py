@@ -15,31 +15,43 @@ class DelegatingHandler(BaseHandler):
     def onConnect(self, dispatcher):
         self.avatar.onConnect(dispatcher)
 
-    def handle_start(self, dispatcher, target=None):
+    def handle_start(self, dispatcher):
+        """
+        Consume messages and pass them on to the provisioner.
+        """
         terminal = dispatcher.terminal
-        if target == 'queue':
-            self.avatar.groupService.startAMQPMessageLoop()
-            terminal.write("Starting to read from message queue.")
-            terminal.nextLine()
-        elif target is None: 
-            terminal.write("Usage: start queue")
-            terminal.nextLine()
-        else:
-            terminal.write("Unrecognized target, '{0}'".format(target))
-            terminal.nextLine()
+        self.avatar.groupService.startAMQPMessageLoop()
+        terminal.write("Starting to process messages.")
+        terminal.nextLine()
 
-    def handle_stop(self, dispatcher, target=None):
+    def handle_stop(self, dispatcher):
+        """
+        Stop reading AMQP messages.
+        """
         terminal = dispatcher.terminal
-        if target == 'queue':
-            self.avatar.groupService.stopAMQPMessageLoop()
-            terminal.write("Stopped reading from message queue.")
-            terminal.nextLine()
-        elif target is None: 
-            terminal.write("Usage: stop queue")
-            terminal.nextLine()
-        else:
-            terminal.write("Unrecognized target, '{0}'".format(target))
-            terminal.nextLine()
+        self.avatar.groupService.stopAMQPMessageLoop()
+        terminal.write("Stopped reading messages from the queue.")
+        terminal.nextLine()
+
+    def handle_status(self, dispatcher):
+        """
+        Report on processing status.
+        """ 
+        terminal = dispatcher.terminal
+        running = self.avatar.groupService.service_state.read_from_queue
+        terminal.write("Processing messages: {0}".format(running))
+        terminal.nextLine()
+
+    def handle_shutdown(self, dispatcher):
+        """
+        Shutdown this service.
+        """
+        terminal = dispatcher.terminal
+        terminal.write("Shutting down ...")
+        terminal.nextLine()
+        from twisted.internet import reactor
+        reactor.stop()
+
 
 SSHDelegatingProtocolFactory = makeSSHDispatcherProtocolFactory(DelegatingHandler)
 
