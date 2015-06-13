@@ -7,6 +7,7 @@ from txsshadmin.proto_dispatcher import (
     makeSSHDispatcherProtocolFactory,
     BaseHandler)
 from txsshadmin.service import SSHServiceBase
+from txgroupprovisioner.logging import make_syslog_observer
 import grp
 import pwd
 
@@ -79,6 +80,38 @@ class DelegatingHandler(BaseHandler):
                     option=option,
                     value=value))
                 terminal.nextLine()
+
+    def handle_loglevel(self, dispatcher, logname=None, level=None):
+        """
+        Set log levels.
+        Usage: loglevel <LOGNAME> <LEVEL>
+        Valid logs: root, amqp, provisioner
+        Valid levels: debug, info, warn, error, critical
+        """
+        terminal = dispatcher.terminal
+        groupService = self.avatar.groupService
+        syslog_prefix = groupService.syslog_prefix
+        logs = {
+            'root': groupService.log,
+            'amqp': groupService.amqp_log,
+            'provisioner': groupService.provisioner.log}
+        levels = set(['debug', 'info', 'warn', 'error', 'critical'])
+        if logname is not None and level is not None:
+            if level in levels:
+                log = logs.get(logname, None)
+                if log is not None:
+                    log.observer = make_syslog_observer(
+                        level, 
+                        prefix=syslog_prefix)
+                else:
+                    terminal.write("Invalid log, '{0}'.".format(logname))
+                    terminal.nextLine()
+            else:
+                terminal.write("Invalid log level, '{0}'.".format(level))
+                terminal.nextLine()
+        else:
+            terminal.write("Usage: loglevel <LOGNAME> <LEVEL>")
+            terminal.nextLine()
 
 
 SSHDelegatingProtocolFactory = makeSSHDispatcherProtocolFactory(DelegatingHandler)
