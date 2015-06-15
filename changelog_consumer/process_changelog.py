@@ -59,9 +59,13 @@ def send_message(channel, exchange, route_key, msg):
     channel.basicPublish(exchange, routing_key, props, message.getBytes())
     channel.waitForConfirmsOrDie()
 
-def send_group_mod(channel, exchange, router, group, action_name, subject_id):
+def send_group_mod(channel, exchange, router, group, action_name, subject_id, hmac_secret):
     route_key = router.get_key(group, subject_id, action_name)
-    msg = "%s\n%s\n%s" % (group, subject_id, action_name)
+        msg = "%s\n%s\n%s" % (group, subject_id, action_name)
+    if hmac_secret is not None:
+        h = hmac.new(hmac_secret, msg)
+        digest = h.hexdigest()
+        msg = "%s\n%s" % (msg, digest)
     send_message(channel, exchange, route_key, msg)
 
 def load_route_map(fname):
@@ -203,6 +207,9 @@ def main(args):
     routefile = args.route_file
     if routefile is None:
         routefile = scp.get("APPLICATION", "routemap")
+    hmac_secret = None
+    if scp.has_section("APPLICATION", "hmac"):
+        hmac_secret = scp.get("APPLICATION", "hmac")
     debug("AMQP host => '%s'" % host)
     debug("AMQP port => '%s'" % port)
     debug("AMQP vhost => '%s'" % vhost)
@@ -259,7 +266,7 @@ def main(args):
                 debug("Attempting to send message: exchange='%s', group='%s', action='%s', subject='%s'" % (
                     exchange, group, action_name, subject_id))
                 try:
-                    send_group_mod(channel, exchange, router, group, action_name, subject_id)
+                    send_group_mod(channel, exchange, router, group, action_name, subject_id, hmac_secret)
                 except (Exception, ), ex:
                     warn("Could not send message.\n%s\n" % str(ex))
                     time.sleep(10)

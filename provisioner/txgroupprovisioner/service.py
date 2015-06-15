@@ -2,12 +2,12 @@
 
 # Standard library
 from __future__ import print_function
+import hmac
 from json import load
 import os
 import os.path
 import sys
 from textwrap import dedent
-
 # External modules
 # - Twisted
 from twisted.application import service
@@ -221,23 +221,37 @@ class GroupProvisionerService(Service):
         log = self.amqp_log
         provisioner = self.provisioner
         service_state = self.service_state
+        hmac_secret = self.amqp_info.get('hmac', None)
         log.debug("Attempting to read an AMQP message ...")
         try:
             msg = yield queue.get()
         except QueueClosedError:
             log.warn("Queue closed-- message not processed.")
             returnValue(None) 
-        log.debug("checkpoint 0")
         if not service_state.read_from_queue:
             returnValue(None) 
         log.debug('Received: "{msg}" from channel # {channel}.', msg=msg.content.body, channel=channel.id)
         parts = msg.content.body.split("\n")
-        try:
+        if len(parts) == 4 and parts[3].strip() == "":
+            parts = parts[:3]
+        if len(parts) == 3 and hmac_secret is None:
             group = parts[0]
             subject = parts[1]
             action = parts[2]
-        except IndexError:
+            digest = None
+            expected_digest = None
+        elif  len(parts) == 4 and hmac_secret is not None:
+            group = parts[0]
+            subject = parts[1]
+            action = parts[2]
+            digest = parts[3]
+            expected_digest = hmac.new(hmac_secret, '\n'.join(parts[:3])).hexdigest()
+        else:
             log.warn("Skipping invalid message: {msg!r}", msg=msg.content.body)
+            yield channel.basic_ack(delivery_tag=msg.delivery_tag)
+            returnValue(None) 
+        if hmac_secret is not None and expected_digest != digest:
+            log.warn("Message contains invalid digest: {msg!r}", msg=msg.content.body)
             yield channel.basic_ack(delivery_tag=msg.delivery_tag)
             returnValue(None) 
         recorded = False
