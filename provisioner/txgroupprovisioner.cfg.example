@@ -2,9 +2,9 @@
 log_level = DEBUG
 
 [AMQP]
+endpoint = tcp:host=127.0.0.1:port=5672
+#endpoint = ssl:host=myhost.example.net:port=5671:caCertsDir=/path/to/ca/cert/folder
 log_level = DEBUG
-host = localhost
-port = 5672
 exchange = grouper_exchange
 vhost = /
 user = guest

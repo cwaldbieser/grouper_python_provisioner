@@ -227,7 +227,6 @@ class GroupProvisionerService(Service):
         except QueueClosedError:
             log.warn("Queue closed-- message not processed.")
             returnValue(None) 
-        log.debug("checkpoint 0")
         if not service_state.read_from_queue:
             returnValue(None) 
         log.debug('Received: "{msg}" from channel # {channel}.', msg=msg.content.body, channel=channel.id)
