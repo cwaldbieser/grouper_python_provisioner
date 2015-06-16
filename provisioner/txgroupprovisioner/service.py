@@ -88,7 +88,7 @@ class GroupProvisionerService(Service):
         provisioner_factory = get_plugin_factory(provisioner_tag, IProvisionerFactory)
         if provisioner_factory is None:
             log.error("No provisioner factory was found!")
-            sys.exit(1)
+            reactor.stop()
         provisioner = provisioner_factory.generateProvisioner()
         provisioner.service_state = service_state
         provisioner.load_config(
