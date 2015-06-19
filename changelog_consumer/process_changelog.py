@@ -31,18 +31,23 @@ from com.rabbitmq.client import ConnectionFactory
 from com.rabbitmq.client import Connection       
 from com.rabbitmq.client import Channel                        
 from com.rabbitmq.client import QueueingConsumer     
+from java.io import FileInputStream
 from java.lang import String                         
 from java.lang import Boolean
+from java.security import KeyStore
+from javax.net.ssl import SSLContext, TrustManagerFactory
 from sortedcollection import SortedCollection
 
 # AMQP functions
-def get_amqp_conn(host, port, vhost, user, passwd):
+def get_amqp_conn(host, port, vhost, user, passwd, ssl_ctx=None):
     factory = ConnectionFactory()
     factory.setHost(host)
     factory.setPort(port)
     factory.setUsername(user)
     factory.setPassword(passwd)
     factory.setVirtualHost(vhost)
+    if ssl_ctx is not None:
+        factory.useSslProtocol(ssl_ctx)
     conn = factory.newConnection()
     return conn
 
@@ -173,7 +178,15 @@ def load_config(config_name):
             os.path.join(os.path.abspath(os.curdir), "process_changelog.cfg")])
     info("Read configuration from: %s" % (', '.join(files)))
     return scp
-        
+
+def getSSLContext(trust_store, passphrase, tls_protocol="TLSv1.1"):
+    tstore = KeyStore.getInstance("JKS")
+    tstore.load(FileInputStream(trust_store), passphrase)
+    tmf = TrustManagerFactory.getInstance("SunX509")
+    tmf.init(tstore)
+    c = SSLContext.getInstance(tls_protocol)
+    c.init(None, tmf.getTrustManagers(), None)
+    return c    
 
 def main(args):
     scp = load_config(args.config)
@@ -197,6 +210,18 @@ def main(args):
     exchange = args.exchange
     if exchange is None:
         exchange = scp.get("AMQP", "exchange")
+    if scp.has_option("AMQP", "keystore"):
+        keystore = scp.get("AMQP", "keystore")
+    else:
+        keystore = None
+    if scp.has_option("AMQP", "keystore_passphrase"):
+        keystore_passphrase = scp.get("AMQP", "keystore_passphrase")
+    else:
+        keystore_passphrase = None
+    if scp.has_option("AMQP", "tls_version"):
+        tls_version = scp.get("AMQP", "tls_version")
+    else:
+        tls_version = "TLSv1.1"
     changefile = args.change_file
     if changefile is None:
         changefile = scp.get("APPLICATION", "changefile")
@@ -210,11 +235,19 @@ def main(args):
     debug("AMQP exchange => '%s'" % exchange)
     debug("AMQP changefile => '%s'" % changefile)
     debug("AMQP routemap => '%s'" % routefile)
+    if (keystore is not None) and (keystore_passphrase is not None):
+        debug("AMQP keystore => '%s'" % keystore)
+    else:
+        debug("AMQP not configured for TLS (missing keystore or passphrase).")
     # Read routes.
     routes = load_route_map(routefile)
     router = Router(routes)
     # Connect to message queue.
-    amqp = get_amqp_conn(host, port, vhost, user, passwd)
+    if keystore is not None and keystore_passphrase is not None:
+        ssl_ctx = getSSLContext(keystore, keystore_passphrase, tls_version)
+    else:
+        ssl_ctx = None
+    amqp = get_amqp_conn(host, port, vhost, user, passwd, ssl_ctx=ssl_ctx)
     channel = amqp.createChannel()                 
     # END connecto to message queue.
     session = getRootSession()
