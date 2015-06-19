@@ -2,13 +2,17 @@
 
 THISDIR="$( cd $(dirname $0); pwd)"
 SCRIPT="$THISDIR/$(basename $0)"
+CONFD="$THISDIR/conf.d"
 
-PIDFILE="$THISDIR/twistd.pid"
-if [ -f "$PIDFILE" ]; then
-    pid=$(cat "$PIDFILE")
-    if [ ! -z "$pid" ]; then
-        kill -HUP "$pid"
-        retval=$?
+cd "$THISDIR"
+ls "$CONFD"/*.cfg | while read fname; do
+    BASE=$(basename "$fname" .cfg)
+    PIDFILE="$BASE.pid"
+    if [ -f "$PIDFILE" ]; then
+        PID=$(cat "$PIDFILE")
+        if [ ! -z "$PID" ]; then
+            kill -INT "$PID"
+        fi
     fi
-fi
-exit "$retval"
+done
+

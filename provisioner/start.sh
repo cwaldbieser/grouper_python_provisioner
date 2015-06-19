@@ -3,14 +3,15 @@
 THISDIR="$( cd $(dirname $0); pwd)"
 SCRIPT="$THISDIR/$(basename $0)"
 PYENV="$THISDIR/pyenv"
-GROUPER_USER=grouper
-GROUPER_GROUP=grouper
-LOGFILE=/var/log/txgroupprovisioner/txgroupprovisioner.log
-PIDFILE="$THISDIR/twistd.pid"
+TWISTD="$THISDIR/twistd.sh"
+CONFD="$THISDIR/conf.d"
 
-sudo -u "$GROUPER_USER" touch "$LOGFILE"
-chown "$GROUPER_USER":"$GROUPER_GROUP" "$LOGFILE"
 cd "$THISDIR"
 . "$PYENV/bin/activate"
-twistd -u $(id -u "$GROUPER_USER") -g$(id -g "$GROUPER_USER") -y "$THISDIR/txgroupprovisioner/txgroupprovisioner.py" --syslog --prefix txgroupprovisioner --pidfile "$PIDFILE"
+ls "$CONFD"/*.cfg | while read fname; do
+    CONFIG="$CONFD/$fname"
+    BASE=$(basename "$fname" .cfg)
+    PIDFILE="$BASE.pid"
+    "$TWISTD" --syslog --prefix "$BASE" --pidfile "$PIDFILE" provisioner -c "$CONFIG"
+done
 

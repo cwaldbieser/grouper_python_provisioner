@@ -4,8 +4,9 @@ from __future__ import print_function
 import argparse
 import sys
 # Application modules
-from txgroupprovisioner.service import GroupProvisionerService
 from txgroupprovisioner.admin import SSHAdminService
+from txgroupprovisioner.config import load_config, section2dict
+from txgroupprovisioner.service import GroupProvisionerService
 
 # External modules
 from twisted.application import internet
@@ -13,6 +14,7 @@ from twisted.application.service import IServiceMaker, MultiService
 from twisted.plugin import getPlugins, IPlugin
 from twisted.python import usage
 from zope.interface import implements
+from twisted.python import log
 
 
 class Options(usage.Options):
@@ -22,7 +24,7 @@ class Options(usage.Options):
             "configurations."],
         ['ssh-endpoint', 's', None, 
             "Endpoint string for SSH admin interface.  E.g. 'tcp:2022'"],    
-        ['admin-group', 'a', 'txgroupadmins', 
+        ['admin-group', 'a', None, 
             "Administrative access group.  Default 'txgroupadmins'"],    
     ]
 
@@ -66,6 +68,21 @@ class MyServiceMaker(object):
             action='store',
             default='twisted')
         args, unknown = parser.parse_known_args()
+        # Read the SSH config.
+        log.msg("CHECKPOINT 0!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        scp = load_config(config)
+        if scp.has_section("SSH"):
+            log.msg("Has SSH section")
+            ssh_cfg = section2dict(scp, "SSH")
+            log.msg(str(ssh_cfg))
+            if ssh_endpoint_str is None:
+                ssh_endpoint_str = ssh_cfg.get('endpoint', None)
+            if admin_group is None:
+                admin_group = ssh_cfg.get('admin-group', None)
+        else:
+            log.msg("OOOPS!")
+        if admin_group is None:
+            admin_group = 'txgroupadmins'
         # Create the service.
         groupService = GroupProvisionerService(
             config=config, 
@@ -88,5 +105,4 @@ class MyServiceMaker(object):
 # Now construct an object which *provides* the relevant interfaces
 # The name of this variable is irrelevant, as long as there is *some*
 # name bound to a provider of IPlugin and IServiceMaker.
-
 serviceMaker = MyServiceMaker()
