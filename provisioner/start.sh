@@ -9,8 +9,9 @@ CONFD="$THISDIR/conf.d"
 cd "$THISDIR"
 . "$PYENV/bin/activate"
 ls "$CONFD"/*.cfg | while read fname; do
-    CONFIG="$CONFD/$fname"
-    BASE=$(basename "$fname" .cfg)
+    FNAME=$(basename "$fname")
+    CONFIG="$CONFD/$FNAME"
+    BASE=$(basename "$FNAME" .cfg)
     PIDFILE="$BASE.pid"
     "$TWISTD" --syslog --prefix "$BASE" --pidfile "$PIDFILE" provisioner -c "$CONFIG"
 done

@@ -14,7 +14,6 @@ from twisted.application.service import IServiceMaker, MultiService
 from twisted.plugin import getPlugins, IPlugin
 from twisted.python import usage
 from zope.interface import implements
-from twisted.python import log
 
 
 class Options(usage.Options):
@@ -69,18 +68,13 @@ class MyServiceMaker(object):
             default='twisted')
         args, unknown = parser.parse_known_args()
         # Read the SSH config.
-        log.msg("CHECKPOINT 0!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
         scp = load_config(config)
         if scp.has_section("SSH"):
-            log.msg("Has SSH section")
             ssh_cfg = section2dict(scp, "SSH")
-            log.msg(str(ssh_cfg))
             if ssh_endpoint_str is None:
                 ssh_endpoint_str = ssh_cfg.get('endpoint', None)
             if admin_group is None:
                 admin_group = ssh_cfg.get('admin-group', None)
-        else:
-            log.msg("OOOPS!")
         if admin_group is None:
             admin_group = 'txgroupadmins'
         # Create the service.

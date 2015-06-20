@@ -6,7 +6,8 @@ CONFD="$THISDIR/conf.d"
 
 cd "$THISDIR"
 ls "$CONFD"/*.cfg | while read fname; do
-    BASE=$(basename "$fname" .cfg)
+    FNAME=$(basename "$fname")
+    BASE=$(basename "$FNAME" .cfg)
     PIDFILE="$BASE.pid"
     if [ -f "$PIDFILE" ]; then
         PID=$(cat "$PIDFILE")
