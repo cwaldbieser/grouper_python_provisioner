@@ -66,6 +66,10 @@ The configuration sections and options are below.
     * **queue**: The queue from which the provisioner reads messages.
     * **route_map**: A JSON config file that specifies bindings the exchange uses
       to route messages to queues.
+* *SSH*
+    * **endpoint**: Service endpoint string for SSH admin service.  E.g. `tcp:2023`.
+    * **group**: Local group an account must belong to in order to access
+      the administrative interface.
 * *PROVISIONER* (see below)
 
 -----------------------
@@ -141,4 +145,20 @@ configuration (dictionary) consiting of the following keys:
   by searching.
 * **create_context**: (string) The parent DN under which the group should be 
   created if the **create_group** option is set to `true`.
+
+=======
+Running
+=======
+
+A single instance of the provisioner may be invoked as a twisted plugin::
+
+    $ ./twistd.sh --syslog provisioner
+
+Other options for the `provisioner` plugin or the `twistd` program itself
+are available.  Try using the `--help` option for more information.
+
+Alternatively, specific configurations for multiple provisioners may be placed
+in a `conf.d` folder in the main application folder.  The scripts `start.sh`
+and `stop.sh` can be used to collectively strt and stop multiple configured
+provisioners.
 
