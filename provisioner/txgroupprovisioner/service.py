@@ -15,7 +15,6 @@ from twisted.application.service import Service
 from twisted.internet import reactor, task
 from twisted.internet.defer import inlineCallbacks, returnValue, DeferredList
 from twisted.internet.endpoints import clientFromString, connectProtocol
-from twisted.internet.protocol import ClientCreator
 from twisted.logger import Logger
 from txamqp.client import TwistedDelegate
 from txamqp.protocol import AMQClient
