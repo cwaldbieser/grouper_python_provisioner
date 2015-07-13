@@ -297,6 +297,19 @@ def main(args):
                     warn("Could not send message.\n%s\n" % str(ex))
                     time.sleep(10)
                     continue
+                except (java.net.SocketException, com.rabbitmq.client.AlreadyClosedException), ex:
+                    while True:
+                        time.sleep(20)
+                        # Try to reconnect.
+                        try:
+                            amqp = get_amqp_conn(host, port, vhost, user, passwd, ssl_ctx=ssl_ctx)
+                            channel = amqp.createChannel()                 
+                        except (KeyboardInterrupt,), ex:
+                            raise
+                        except:
+                            warn("Could not reconnect to exchange.  Will retry.")
+                            continue
+                        break
                 break
             update_last_sequence(changefile, n+last_sequence+1)
 
