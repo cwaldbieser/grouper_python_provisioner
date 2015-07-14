@@ -1,4 +1,5 @@
 Twisted==15.2.0
+service-identity==14.0.0
 Jinja2==2.7.3
 ldaptor==14.0
 argparse==1.2.1

@@ -74,7 +74,7 @@ class MyServiceMaker(object):
             if ssh_endpoint_str is None:
                 ssh_endpoint_str = ssh_cfg.get('endpoint', None)
             if admin_group is None:
-                admin_group = ssh_cfg.get('admin-group', None)
+                admin_group = ssh_cfg.get('admin_group', None)
         if admin_group is None:
             admin_group = 'txgroupadmins'
         # Create the service.

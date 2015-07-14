@@ -152,37 +152,57 @@ class SSHAdminRealm(object):
 
     def requestAvatar(self, avatarId, mind, *interfaces):
         if IConchUser in interfaces:
+            log = self.groupService.log
             avatar = SSHUnauthorizedAvatar(avatarId)
             adminGroup = self.adminGroup
             try:
                 user_info = pwd.getpwnam(avatarId)
             except KeyError:
-                pass
+                log.debug("Could not find user info for '{avatarId}'.",
+                    avatarId=avatarId) 
             else:
                 gid = user_info.pw_gid
                 try:
                     grp_info = grp.getgrgid(gid)
                 except KeyError:
-                    pass
+                    log.debug("Could not find group info for {avatarId} primary group '{gid}'.",
+                        avatarId=avatarId, gid=gid) 
                 else:
                     group_name = grp_info.gr_name
                     is_admin = False
                     if group_name == adminGroup:
                         is_admin = True
                     else:
+                        log.debug((
+                            "Avatar {avatarId} primary group {group} "
+                            "is not admin group {admin_group}."),
+                            avatarId=avatarId,
+                            group=group_name,
+                            admin_group=adminGroup)
                         try:
                             grp_info = grp.getgrnam(adminGroup)
                         except KeyError:
-                            pass
+                            log.debug("Could not find group info for '{admin_group}'.",
+                                admin_group=adminGroup) 
                         else:
                             members = set(grp_info.gr_mem)
                             if avatarId in members:
                                 is_admin = True
+                            else:
+                                log.debug("Avatar '{avatarId}' not a member of '{adminGroup}'.",
+                                    avatarId=avatarId,
+                                    adminGroup=adminGroup)
                     if is_admin:
+                        log.info(
+                            "Avatar ID {avatarId} successfully logged onto admin service.", 
+                            avatarId=avatarId)
                         avatar = SSHAdminAvatar(avatarId)
                         avatar.groupService = self.groupService
                     else:
                         avatar = SSHUnauthorizedAvatar(avatarId)
+                        log.info(
+                            "Avatar ID {avatarId} attempted unauthorized access to the admin service.", 
+                            avatarId=avatarId)
             return IConchUser, avatar, lambda: None
         else:
             raise Exception("No supported interfaces found.")
