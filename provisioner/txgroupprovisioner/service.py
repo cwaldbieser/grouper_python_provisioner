@@ -71,7 +71,7 @@ class GroupProvisionerService(Service):
                 make_file_observer,
                 self.logfile)
         else:
-            pass
+            raise Exception("No log observer factory!")    
         
     def startService(self):
         """
@@ -325,10 +325,10 @@ def main():
 
 if __name__ == "__main__":
     main()
-else:
-    application = service.Application("Twisted Group Provisioner")
-    service = GroupProvisionerService()
-    service.setServiceParent(application)
+#else:
+#    application = service.Application("Twisted Group Provisioner")
+#    service = GroupProvisionerService()
+#    service.setServiceParent(application)
     
     
     
