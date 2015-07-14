@@ -122,7 +122,7 @@ Group Map Configuration
 
 The group map is a JSON file that maps fully qualified Grouper group names to
 LDAP group identifiers (e.g. a CN).  It can also map a Grouper stem to a template.
-Grouper stemps are denoted with a trailing colon (':').
+Grouper stems are denoted with a trailing colon (':').
 
 Valid targets for a group can be an LDAP group name (string) or an LDAP group
 configuration (dictionary) consisting of the following keys:
@@ -158,7 +158,7 @@ Other options for the `provisioner` plugin or the `twistd` program itself
 are available.  Try using the `--help` option for more information.
 
 Alternatively, specific configurations for multiple provisioners may be placed
-in a `conf.d` folder in the main application folder.  The scripts `start.sh`
-and `stop.sh` can be used to collectively strt and stop multiple configured
+in a `conf.d` folder in the main application folder.  The scripts `provision`
+and `stop-provisioning` can be used to collectively start and stop multiple configured
 provisioners.
 
