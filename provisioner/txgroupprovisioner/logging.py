@@ -1,8 +1,11 @@
 
 from twisted.logger import Logger, LogLevel
 from twisted.logger import LegacyLogObserverWrapper, FilteringLogObserver, LogLevelFilterPredicate
+from twisted.python.log import FileLogObserver
+from twisted.python.logfile import DailyLogFile
 from twisted.python.syslog import SyslogObserver
 import datetime
+import os.path
 
 def wrap_observer(observer):
 
@@ -15,13 +18,21 @@ def wrap_observer(observer):
 
     return observeit
 
-def make_syslog_observer(log_level_name, prefix="txLogger"):
+def make_wrapped_observer(observer, log_level_name):
     log_level = LogLevel.lookupByName(log_level_name.lower())
-    observer = SyslogObserver(prefix)
     observer = LegacyLogObserverWrapper(observer.emit)
     observer = wrap_observer(observer)
     predicate = LogLevelFilterPredicate(defaultLogLevel=log_level)
     observer = FilteringLogObserver(observer, [predicate])
     return observer
 
+def make_syslog_observer(log_level_name, prefix="txLogger"):
+    observer = SyslogObserver(prefix)
+    return make_wrapped_observer(observer, log_level_name)
+
+def make_file_observer(path, log_level_name):
+    folder, fname = os.path.split(path)
+    logfile = DailyLogFile(fname, folder)
+    observer = FileLogObserver(logfile)
+    return make_wrapped_observer(observer, log_level_name)
 

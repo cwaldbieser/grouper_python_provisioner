@@ -20,7 +20,6 @@ import os
 import os.path
 from textwrap import dedent
 from config import load_config, section2dict
-from logging import make_syslog_observer
 import sqlite3
 import sys
 import urlparse
@@ -52,15 +51,12 @@ class LDAPProvisioner(object):
     group_attrib_type = 'cn'
 
     @inlineCallbacks
-    def load_config(self, config_file=None, default_log_level='info', syslog_prefix=None):
+    def load_config(self, config_file, default_log_level, logObserverFactory):
         scp = load_config(config_file, defaults=self.getConfigDefaults())
         config = section2dict(scp, "PROVISIONER")
         self.config = config
         log_level = config.get('log_level', default_log_level)
-        log = Logger(
-            observer=make_syslog_observer(
-                log_level, 
-                prefix=syslog_prefix))
+        log = Logger(observer=logObserverFactory(log_level))
         self.log = log
         log.debug("Initialized logging for LDAP provisioner.", 
             event_type='init_provisioner_logging')

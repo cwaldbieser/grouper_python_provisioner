@@ -15,7 +15,7 @@ class IProvisionerFactory(Interface):
 class IProvisioner(Interface):
     service_state = Attribute("Shared service state.")
 
-    def load_config(config_file, default_log_level):
+    def load_config(config_file, default_log_level, logObserverFactory):
         """
         Load the configuration for this provisioner and initialize it.
         """

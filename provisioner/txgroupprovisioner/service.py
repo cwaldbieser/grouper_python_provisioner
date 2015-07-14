@@ -2,6 +2,7 @@
 
 # Standard library
 from __future__ import print_function
+from functools import partial
 from json import load
 import os
 import os.path
@@ -23,7 +24,7 @@ import txamqp.spec
 # - application
 from config import load_config, section2dict
 from interface import IProvisionerFactory
-from logging import make_syslog_observer
+from logging import make_syslog_observer, make_file_observer
 from utils import get_plugin_factory
 
 
@@ -56,8 +57,22 @@ class GroupProvisionerService(Service):
         self.service_state = ServiceState()
         self.use_syslog = use_syslog
         self.syslog_prefix = syslog_prefix
+        self.logfile = logfile
         self.config = config
         self.amqpLooper = None
+        self.make_log_observer_factory()
+
+    def make_log_observer_factory(self):
+        if self.use_syslog:
+            self.logObserverFactory = partial(
+                make_syslog_observer,
+                prefix=self.syslog_prefix)
+        elif self.logfile is not None:
+            self.logObserverFactory = partial(
+                make_file_observer,
+                self.logfile)
+        else:
+            pass
         
     def startService(self):
         """
@@ -68,17 +83,11 @@ class GroupProvisionerService(Service):
         self.scp = scp
         app_info = section2dict(scp, "APPLICATION")
         log_level = app_info.get("log_level", "INFO")
-        log = Logger(
-            observer=make_syslog_observer(
-                log_level, 
-                prefix=self.syslog_prefix))
+        log = Logger(observer=self.logObserverFactory(log_level))
         self.log = log
         self.amqp_info = section2dict(scp, "AMQP")
         amqp_log_level = self.amqp_info.get("log_level", log_level) 
-        self.amqp_log = Logger(
-            observer=make_syslog_observer(
-                amqp_log_level, 
-                prefix=self.syslog_prefix))
+        self.amqp_log = Logger(observer=self.logObserverFactory(amqp_log_level))
         service_state = self.service_state 
         service_state.last_update = None
         self.start_amqp_client()
@@ -87,13 +96,13 @@ class GroupProvisionerService(Service):
         provisioner_factory = get_plugin_factory(provisioner_tag, IProvisionerFactory)
         if provisioner_factory is None:
             log.error("No provisioner factory was found!")
-            reactor.stop()
+            sys.exit(1)
         provisioner = provisioner_factory.generateProvisioner()
         provisioner.service_state = service_state
         provisioner.load_config(
-            config_file=self.config, 
-            default_log_level=log_level, 
-            syslog_prefix=self.syslog_prefix)
+            self.config, 
+            log_level,
+            self.logObserverFactory)
         self.provisioner = provisioner
 
     def start_amqp_client(self):
