@@ -66,6 +66,8 @@ def send_message(channel, exchange, route_key, msg):
 
 def send_group_mod(channel, exchange, router, group, action_name, subject_id):
     route_key = router.get_key(group, subject_id, action_name)
+    debug("route_key='%s' group='%s' subject='%s' action='%s'" % (
+        route_key, group, subject_id, action_name))
     msg = "%s\n%s\n%s" % (group, subject_id, action_name)
     send_message(channel, exchange, route_key, msg)
 

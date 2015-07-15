@@ -7,7 +7,7 @@ import sys
 from txgroupprovisioner.admin import SSHAdminService
 from txgroupprovisioner.config import load_config, section2dict
 from txgroupprovisioner.service import GroupProvisionerService
-
+from txgroupprovisioner.web import WebService
 # External modules
 from twisted.application import internet
 from twisted.application.service import IServiceMaker, MultiService
@@ -29,6 +29,8 @@ class Options(usage.Options):
             "SSH admin private key.  Default 'keys/id_rsa'."],    
         ['ssh-public-key', 'p', None, 
             "SSH admin public key.  Default 'keys/id_rsa.pub'."],    
+        ['web-endpoint', 'w', None, 
+            "Endpoint string for web service."],    
     ]
 
 
@@ -59,6 +61,7 @@ class MyServiceMaker(object):
         admin_group = options['admin-group']
         ssh_private_key = options['ssh-private-key']
         ssh_public_key = options['ssh-public-key']
+        web_endpoint_str = options['web-endpoint']
         # Parse the original `twistd` command line for logging options.
         parser = argparse.ArgumentParser("twistd argument parser")
         parser.add_argument(
@@ -85,6 +88,11 @@ class MyServiceMaker(object):
                 ssh_private_key= ssh_cfg.get('ssh_private_key', None)
             if ssh_public_key is None:
                 ssh_public_key = ssh_cfg.get('ssh_public_key', None)
+        if scp.has_section("WEB"):
+            web_cfg = section2dict(scp, "WEB")
+            if web_endpoint_str is None:
+                web_endpoint_str = web_cfg.get('endpoint', None)
+        # Final defaults.
         if admin_group is None:
             admin_group = 'txgroupadmins'
         if ssh_private_key is None:
@@ -97,18 +105,23 @@ class MyServiceMaker(object):
             use_syslog=args.syslog, 
             syslog_prefix=args.prefix,
             logfile=args.logfile)
-        if ssh_endpoint_str is None:
+        if ssh_endpoint_str is None and web_endpoint_str is None:
             rootService = groupService
         else:
             rootService = MultiService()
             groupService.setServiceParent(rootService)
-            sshService = SSHAdminService()
-            sshService.endpointStr = ssh_endpoint_str
-            sshService.realm.adminGroup = admin_group
-            sshService.realm.groupService = groupService
-            sshService.servicePrivateKey = ssh_private_key
-            sshService.servicePublicKey = ssh_public_key
-            sshService.setServiceParent(rootService)
+            if ssh_endpoint_str is not None:
+                sshService = SSHAdminService()
+                sshService.endpointStr = ssh_endpoint_str
+                sshService.realm.adminGroup = admin_group
+                sshService.realm.groupService = groupService
+                sshService.servicePrivateKey = ssh_private_key
+                sshService.servicePublicKey = ssh_public_key
+                sshService.setServiceParent(rootService)
+            if web_endpoint_str is not None:
+                webService = WebService()
+                webService.endpointStr = web_endpoint_str
+                webService.setServiceParent(rootService)
         return rootService
 
 

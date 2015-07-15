@@ -103,6 +103,11 @@ class GroupProvisionerService(Service):
             log_level,
             self.logObserverFactory)
         self.provisioner = provisioner
+        web_log_level = log_level
+        if scp.has_section("WEB"):
+            web_info = section2dict(scp, "WEB")
+            web_log_level = web_info.get("log_level", log_level)
+        self.web_log = Logger(observer=self.logObserverFactory(web_log_level))
 
     def parse_bindings(self, fname):
         """

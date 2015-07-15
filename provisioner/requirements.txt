@@ -5,3 +5,4 @@ ldaptor==14.0
 argparse==1.2.1
 txAMQP==0.6.2
 zope.interface==4.1.2
+klein==15.0.0
