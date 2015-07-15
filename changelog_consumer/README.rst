@@ -102,6 +102,6 @@ the trust store and the passphrase must be included in the changelog consumer's 
 in order to use TLS.
 
 Also make sure that the port you specify on the exchange host is using TLS.  If it is
-a plain TCP connection, an error will occur (hopefully memntioning something along the
+a plain TCP connection, an error will occur (hopefully mentioning something along the
 lines of "Maybe a non-SSL connection?").
 
