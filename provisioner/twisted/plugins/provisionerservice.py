@@ -121,6 +121,7 @@ class MyServiceMaker(object):
             if web_endpoint_str is not None:
                 webService = WebService()
                 webService.endpointStr = web_endpoint_str
+                webService.groupService = groupService
                 webService.setServiceParent(rootService)
         return rootService
 

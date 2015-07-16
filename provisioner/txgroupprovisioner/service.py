@@ -2,13 +2,13 @@
 
 # Standard library
 from __future__ import print_function
+import datetime
 from functools import partial
 from json import load
 import os
 import os.path
 import sys
 from textwrap import dedent
-
 # External modules
 # - Twisted
 from twisted.application import service
@@ -23,6 +23,7 @@ from txamqp.queue import Closed as QueueClosedError
 import txamqp.spec
 # - application
 from config import load_config, section2dict
+import datetimepatch 
 from interface import IProvisionerFactory
 from logging import make_syslog_observer, make_file_observer
 from utils import get_plugin_factory
@@ -35,6 +36,7 @@ class ServiceState(object):
 
 class GroupProvisionerService(Service):
     log = None
+    maxSafeTimeNoUpdate = 60
     consumerTag = "mytag"
 
     def __init__(
@@ -60,6 +62,28 @@ class GroupProvisionerService(Service):
         self.config = config
         self.amqpLooper = None
         self.make_log_observer_factory()
+
+    def checkStatus(self):
+        """
+        Return True if (1) the AMQP service is actively reading messages,
+        and (2) the last_update set by the provisioner is 
+        """
+        log = self.log
+        service_state = self.service_state
+        if service_state.read_from_queue:
+            last_update = service_state.last_update 
+            log.debug("last_update={last_update}", 
+                last_update=last_update.strftime("%Y-%m-%d %H:%M:%S"))
+            delta = datetime.datetime.today() - last_update
+            total_seconds = delta.total_seconds()
+            log.debug("total_seconds = {total_seconds} max_safe_time = {mst}", 
+                total_seconds=total_seconds, mst=self.maxSafeTimeNoUpdate)
+            if total_seconds <= self.maxSafeTimeNoUpdate:
+                return True
+            else:
+                return False
+        else:
+            return False
 
     def make_log_observer_factory(self):
         if self.use_syslog:
@@ -88,7 +112,7 @@ class GroupProvisionerService(Service):
         amqp_log_level = self.amqp_info.get("log_level", log_level) 
         self.amqp_log = Logger(observer=self.logObserverFactory(amqp_log_level))
         service_state = self.service_state 
-        service_state.last_update = None
+        service_state.last_update = datetime.datetime.today()
         self.start_amqp_client()
         provisioner_tag = app_info['provisioner']
         log.info("Provisioner tag => '{provisioner}'", provisioner=provisioner_tag)
