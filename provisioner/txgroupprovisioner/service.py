@@ -23,7 +23,6 @@ from txamqp.queue import Closed as QueueClosedError
 import txamqp.spec
 # - application
 from config import load_config, section2dict
-import datetimepatch 
 from interface import IProvisionerFactory
 from logging import make_syslog_observer, make_file_observer
 from utils import get_plugin_factory
@@ -75,10 +74,10 @@ class GroupProvisionerService(Service):
             log.debug("last_update={last_update}", 
                 last_update=last_update.strftime("%Y-%m-%d %H:%M:%S"))
             delta = datetime.datetime.today() - last_update
-            total_seconds = delta.total_seconds()
+            total_secs = total_seconds(delta)
             log.debug("total_seconds = {total_seconds} max_safe_time = {mst}", 
-                total_seconds=total_seconds, mst=self.maxSafeTimeNoUpdate)
-            if total_seconds <= self.maxSafeTimeNoUpdate:
+                total_seconds=total_secs, mst=self.maxSafeTimeNoUpdate)
+            if total_secs <= self.maxSafeTimeNoUpdate:
                 return True
             else:
                 return False
@@ -346,7 +345,10 @@ class GroupProvisionerService(Service):
             passwd = guest
             """.format(spec_path=spec_path))
 
-    
+
+def total_seconds(td):
+    return float((td.microseconds + (td.seconds + td.days * 24 * 3600) * 10**6)) / 10**6    
+
 def main():
     service = GroupProvisionerService()
     service.startService()
