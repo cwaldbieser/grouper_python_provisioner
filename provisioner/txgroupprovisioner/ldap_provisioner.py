@@ -520,7 +520,7 @@ class LDAPProvisioner(object):
             returValue(None)
         assert not len(subjects) > 1, "Multiple DNs found for subject ID '{0}'".format(subject_id)
         subject_id, subject_entry = subjects[0]
-        membs = subject_entry[user_attribute]
+        membs = subject_entry.get(user_attribute, [])
         memb_set = set([normalize_dn(DistinguishedName(m)) for m in membs])
         memb_set = memb_set.union(fq_adds)
         memb_set = memb_set - fq_deletes
