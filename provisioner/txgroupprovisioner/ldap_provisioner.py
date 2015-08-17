@@ -517,7 +517,7 @@ class LDAPProvisioner(object):
             self.log.warn(
                 "No DN found for subject ID '{subject_id}.  Skipping ...'",
                 subject_id=subject_id)
-            returValue(None)
+            returnValue(None)
         assert not len(subjects) > 1, "Multiple DNs found for subject ID '{0}'".format(subject_id)
         subject_id, subject_entry = subjects[0]
         membs = subject_entry.get(user_attribute, [])
