@@ -49,6 +49,7 @@ class LDAPProvisioner(object):
     batch_time = 10
     subject_id_attribute = 'uid'
     group_attrib_type = 'cn'
+    subject_chunk_size = 15
 
     @inlineCallbacks
     def load_config(self, config_file, default_log_level, logObserverFactory):
@@ -400,7 +401,8 @@ class LDAPProvisioner(object):
             sql = "DELETE FROM member_ops;"
             yield self.runDBCommand(sql, is_query=False)
         finally:
-            client.unbind()
+            if client.connected:
+                client.unbind()
                 
     @inlineCallbacks
     def transfer_intake_to_batch(self):
@@ -450,9 +452,22 @@ class LDAPProvisioner(object):
         provision_group = self.provision_group
         empty_dn = config.get("empty_dn", None)
         group_attrib_type = self.group_attrib_type
-        results = yield self.load_subjects(adds, client, attribs=[subject_id_attribute])
+        chunk_size = self.subject_chunk_size
+        results = []
+        q = list(adds)
+        while len(q) > 0:
+            chunk = q[:chunk_size]
+            q = q[chunk_size:]
+            lst =  yield self.load_subjects(set(chunk), client, attribs=[subject_id_attribute])
+            results.extend(lst)
         fq_adds = set(str(x[1].dn).lower() for x in results)
-        results = yield self.load_subjects(deletes, client, attribs=[subject_id_attribute])
+        results = []
+        q = list(deletes)
+        while len(q) > 0:
+            chunk = q[:chunk_size]
+            q = q[chunk_size:]
+            lst =  yield self.load_subjects(set(chunk), client, attribs=[subject_id_attribute])
+            results.extend(lst)
         fq_deletes = set(str(x[1].dn).lower() for x in results)
         group_entry = yield self.lookup_group(target.group, client) 
         needs_create = False
