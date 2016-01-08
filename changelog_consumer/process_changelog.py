@@ -265,7 +265,7 @@ def main(args):
     if last_sequence is None:
         last_sequence = ChangeLogEntry.maxSequenceNumber(True)
     info("Last sequence number is %d.\n" % last_sequence)
-    c.setLastSequenceProcessed(GrouperUtil.defaultIfNull(last_sequence, 0L).longValue()) 
+    c.setLastSequenceProcessed(GrouperUtil.defaultIfNull(last_sequence, 0L)) 
     consumer.saveOrUpdate(c)
     # Initialize the consumer job.
     hib3 = Hib3GrouperLoaderLog()
