@@ -91,6 +91,14 @@ class LDAPProvisioner(object):
             sys.exit(1) 
         self.provision_user = provision_user
         self.provision_group = provision_group
+        try:
+            self.subject_chunk_size = int(config.get('subject_chunk_size', self.subject_chunk_size))
+        except ValueError as ex:
+            log.error("Provisioner `subject_chunk_size` must be a positive integer.")
+            sys.exit(1)
+        if self.subject_chunk_size < 1:
+            log.error("Provisioner `subject_chunk_size` must be a positive integer.")
+            sys.exit(1)
         log.debug(
             "Provisioner LDAP settings: host={ldap_host}, port={ldap_port}, "
             "start_tls={start_tls}, base_dn={base_dn}, "
