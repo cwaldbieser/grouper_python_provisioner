@@ -551,7 +551,8 @@ class LDAPProvisioner(object):
         members.sort()
         try:
             if len(members) == 0:
-                del subject_entry[user_attribute]
+                if user_attribute in subject_entry:
+                    del subject_entry[user_attribute]
             else:
                 subject_entry[user_attribute] = members
             yield subject_entry.commit()    
