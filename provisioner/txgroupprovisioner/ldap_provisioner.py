@@ -550,7 +550,10 @@ class LDAPProvisioner(object):
         members = list(memb_set)
         members.sort()
         try:
-            subject_entry[user_attribute] = members
+            if len(members) == 0:
+                del subject_entry[user_attribute]
+            else:
+                subject_entry[user_attribute] = members
             yield subject_entry.commit()    
         except Exception as ex:
             self.log.error(
