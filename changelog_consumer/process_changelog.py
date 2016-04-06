@@ -318,7 +318,7 @@ def main(args):
         c.setLastSequenceProcessed(c.getLastSequenceProcessed() + num_entries_retrieved)
         consumer.saveOrUpdate(c)
         if num_entries_retrieved != attempt_num_entries:
-            time.sleep(10)
+            time.sleep(1)
 
 
 if __name__ == "__main__":
