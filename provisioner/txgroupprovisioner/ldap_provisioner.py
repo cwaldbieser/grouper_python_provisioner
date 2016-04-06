@@ -215,7 +215,7 @@ class LDAPProvisioner(object):
                     raise
 
     @inlineCallbacks
-    def provision(self, group, subject, action):
+    def provision(self, group, subject, action, attributes=None):
         log = self.log
         db_str = self.config['sqlite_db']
         try:
