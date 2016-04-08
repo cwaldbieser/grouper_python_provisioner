@@ -20,8 +20,8 @@ class IProvisioner(Interface):
         Load the configuration for this provisioner and initialize it.
         """
 
-    def provision(group, subject, action, attributes=None):
+    def provision(route_key, message):
         """
-        Add a group, subject, and action to the provisioning pipeline.
+        Provision an entry based on the original route key and the parsed message.
         """
 

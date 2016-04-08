@@ -271,20 +271,13 @@ class GroupProvisionerService(Service):
         if service_state.stopping or not service_state.read_from_queue:
             returnValue(None) 
         log.debug('Received: "{msg}" from channel # {channel}.', msg=msg.content.body, channel=channel.id)
-        parts = msg.content.body.split("\n")
-        try:
-            group = parts[0]
-            subject = parts[1]
-            action = parts[2]
-        except IndexError:
-            log.warn("Skipping invalid message: {msg!r}", msg=msg.content.body)
-            yield channel.basic_ack(delivery_tag=msg.delivery_tag)
-            returnValue(None) 
-        recorded = False
+        msg_body = msg.content.body
+        tag, unk0, unk1, exchange_name, route_key = msg.fields
         delay = 0
+        recorded = False
         while not recorded and service_state.read_from_queue and not service_state.stopping:
             try:
-                yield task.deferLater(reactor, delay, provisioner.provision, group, subject, action)
+                yield task.deferLater(reactor, delay, provisioner.provision, route_key, msg_body)
             except Exception as ex:
                 log.error("Could not record message from queue.  Error was: {error}", error=ex)
                 delay = min(600, max(delay+20, delay*2))

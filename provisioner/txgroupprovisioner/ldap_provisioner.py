@@ -215,8 +215,20 @@ class LDAPProvisioner(object):
                     raise
 
     @inlineCallbacks
-    def provision(self, group, subject, action, attributes=None):
+    def provision(self, route_key, message):
+        """
+        Provision an entry based on the original route key and the raw message.
+        """
         log = self.log
+        parts = message.split("\n")
+        if len(parts) != 3:
+            log.warn("Invalid message received.  Discarding.  Message was {msg}.", 
+                event_type="invalid_message_error",
+                msg=message)
+            returnValue(None)
+        group = parts[0]
+        subject = parts[1]
+        action = parts[2]
         db_str = self.config['sqlite_db']
         try:
             d = yield self.add_action_to_intake(group, action, subject)
