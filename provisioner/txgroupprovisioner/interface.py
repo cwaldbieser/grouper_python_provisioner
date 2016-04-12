@@ -25,3 +25,9 @@ class IProvisioner(Interface):
         Provision an entry based on the original route key and the parsed message.
         """
 
+class IMessageParser(Interface):
+
+    def parse_message(message):
+        """
+        Attempt to parse a message.       
+        """

@@ -6,6 +6,8 @@ from twisted.logger import Logger
 from twisted.plugin import IPlugin
 from zope.interface import implements
 from config import load_config, section2dict
+from interface import IMessageParserFactory, IMessageParser
+
 
 class KikiProvisionerFactory(object):
     implements(IPlugin, IProvisionerFactory)
@@ -57,12 +59,42 @@ class KikiProvisioner(Interface):
         """                                                             
         Provision an entry based on the original route key and the parsed message.  
         """                                                             
-        # Inspect the received message.  Where is the target destination?
-        pass                                                            
+        # Message must be parsed.
+        # Determine how to parse the message based on the route key.
+        msg_parser = self.get_message_parser(route_key)
+        message = msg_parser.parse_message(message)
+        subject = message.subject
+        attribs = {}
+        if message.requires_attributes:
+            attribs = self.query_subject(subject)
+        msg_writer = self.get_message_writer(message)
+        msg_writer.send_message(message, attribs)
 
     def get_config_defaults(self):
         """
         Return option defaults.
         """
-        pass
+        return dedent("""\
+            [PROVISIONER]
+            delivery_map = delievery_map.json
+            
+            [AMQP_TARGET]
+            endpoint = tcp:host=127.0.0.1:port=5672
+            log_level = INFO
+            exchange = grouper_exchange
+            queue = kiki_q
+            vhost = /
+            user = guest
+            passwd = guest
 
+            [KIKI_DATABASE]
+            driver = sqlite3
+            """)
+
+    def query_subject(self, subject):
+        """
+        Return a dictionary of attribute mappings for a subject.
+        """
+        # Attributes requested/returned should be based on some kind of 
+        # filter / mapping / logic.
+        return {}
