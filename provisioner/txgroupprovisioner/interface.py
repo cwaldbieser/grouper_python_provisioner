@@ -23,15 +23,14 @@ class IProvisioner(Interface):
     def provision(message):
         """
         Provision an entry based on an AMQP message.
+        Returns a Deferred that fires when provisioning is complete.
         """
 
 
 class IMessageParserFactory(Interface):
     tag = Attribute("String used to identify the plugin factory.")
-    opt_help = Attribute('String description of the plugin.')
-    opt_usage = Attribute('String describes how to provide arguments for factory.')
 
-    def generateParser(**kwds):
+    def generate_message_parser(**kwds):
         """
         Create an object that implements IMessageParser.
         """
@@ -41,18 +40,25 @@ class IMessageParser(Interface):
 
     def parse_message(message):
         """
-        Attempt to parse a message.       
+        Parse a message and return a Kiki Instructions
+        object.
         """
 
 
 class IAttributeResolverFactory(Interface):
     tag = Attribute('String used to identify the plugin factory.')
-    opt_help = Attribute('String description of the plugin.')
-    opt_usage = Attribute('String describes how to provide arguments for factory.')
 
-    def generateResolver(config_parser):
+    def generate_attribute_resolver(config_parser):
         """
         Create an object that implements IAttributeResolver.
         """
     
+
+class IAttributeResolver(Interface):
+
+    def resolve_attributes(subject):
+        """
+        Return a Deferred that fires with the attributes for a subject.
+        Attributes are a mapping of keys to a list of values.
+        """
 

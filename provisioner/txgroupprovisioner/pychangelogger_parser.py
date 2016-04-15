@@ -1,21 +1,12 @@
 
-from collections import namedtuple
 from twisted.plugin import IPlugin
 from zope.interface import implements
+from kikimessage import Instructions
 from txgroupprovisioner.interface import (
     IMessageParserFactory, 
     IMessageParser,
 )
 
-
-Instructions = namedtuple(
-    'Instructions',
-    [
-        'subject', 
-        'action',
-        'requires_attributes',
-        'attributes',
-    ])
 
 class PyChangeloggerMessageParserFactory(object):
     implements(IPlugin, IMessageParserFactory)

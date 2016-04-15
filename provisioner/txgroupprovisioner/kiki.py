@@ -3,6 +3,10 @@ from __future__ import print_function
 from collections import namedtuple
 import re
 from textwrap import dedent
+from twisted.internet.defer import (
+    inlineCallbacks, 
+    returnValue,
+)
 from twisted.enterprise import adbapi
 from twisted.logger import Logger
 from twisted.plugin import IPlugin
@@ -17,7 +21,13 @@ from interface import (
     IMessageParserFactory,
 )
 from utils import get_plugin_factory
-
+#
+from twisted.internet.endpoints import clientFromString, connectProtocol
+from txamqp.client import TwistedDelegate
+from txamqp.protocol import AMQClient
+from txamqp.queue import Closed as QueueClosedError
+import txamqp.spec
+#
 
 ParserMatcher = namedtuple(
     'ParserMatcher',
@@ -64,34 +74,23 @@ class KikiProvisioner(Interface):
                 "The attribute resolver identified by tag '{0}' is unknown.".format(
                     attrib_resolver_tag))
         attrib_resolver = factory.generateResolver(scp)
-        # Initialize DB connection pool.
-        # e.g. self.dbpool = adbapi.ConnectionPool('cx_Oracle', user='admin', password ='password', dsn='127.0.0.1/XE')
-        db_section = "KIKI_DATABASE"
-        db_options = scp.options(db_section)
-        db_params = {}
-        driver = "sqlite3"
-        for opt in db_options:
-            if opt.lower() == "driver":
-                driver = scp.get(db_section, opt)
-            else:
-                db_params[opt] = scp.get(db_section, opt)
-        self.dbpool = adbapi.ConnectionPool(driver, **db_params)
         # Load parse map.
         parser_map_filename = config["parser_map"]
         self.load_parser_map(parser_map_filename)
-                                                                        
+                     
+    @inlineCallbacks                                                   
     def provision(self, amqp_message):             
-        """                                                             
+        """                                                
         Provision an entry based on an AMQP message.  
-        """                                                             
+        """                                              
         msg_parser = self.get_message_parser(amqp_message)
         instructions = msg_parser.parse_message(amqp_message)
         attribs = {}
         if instructions.requires_attributes:
-            attribs = self.query_subject(instructions)
+            attribs = yield self.query_subject(instructions)
             instructions.attributes.update(attribs)
         target_route_key = self.get_target_route_key(amqp_message)
-        msg_writer.send_message(instructions)
+        yield self.send_message(target_route_key, instructions)
 
     def get_config_defaults(self):
         """
@@ -100,7 +99,7 @@ class KikiProvisioner(Interface):
         return dedent("""\
             [PROVISIONER]
             parser_map = parser_map.json
-            attrib_resolver = sql_attrib_resolver
+            attrib_resolver = rdbms_attrib_resolver
             
             [AMQP_TARGET]
             endpoint = tcp:host=127.0.0.1:port=5672
@@ -111,7 +110,7 @@ class KikiProvisioner(Interface):
             user = guest
             passwd = guest
 
-            [KIKI_DATABASE]
+            [KIKI_RDMS]
             driver = sqlite3
             """)
 
@@ -205,3 +204,35 @@ class KikiProvisioner(Interface):
         parts = parts[1:].append(parts[0])
         return ".".join(parts)
 
+    @inlineCallbacks
+    def send_message(self, route_key, instructions):
+        """
+        Compose a provisioning message and deliver it to an exchange with
+        routing key `route_key`.
+        """
+        message = {
+            "action": instructions.action,
+            "subject": instructions.subject
+        }
+        if instructions.requires_attributes:
+            message["attributes"] = dict(instructions.attributes)
+        serialized = json.dumps(message)
+        exchange = self.exchange
+        vhost = self.vhost
+        user = self.user
+        passwd = self.passwd
+        endpoint_s = self.endpoint_s
+        spec = self.spec
+        endpoint_s = args.endpoint
+        e = clientFromString(self.reactor, endpoint_s)
+        delegate = TwistedDelegate()
+        amqp_protocol = AMQClient(
+            delegate=delegate,
+            vhost=vhost,
+            spec=spec)
+        conn = yield connectProtocol(e, amqp_protocol)
+        yield conn.authenticate(user, passwd)
+        channel = yield conn.channel(1)
+        # TODO: Send message to exchange.
+
+        
