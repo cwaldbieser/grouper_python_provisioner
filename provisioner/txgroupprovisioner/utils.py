@@ -5,7 +5,7 @@ def get_plugin_factory(tagname, iface, all_matches=False):
     """
     Get plugin factories for interface `iface` with tag names
     matching `tagname`.
-    Retunrs the first match or None if no matches.
+    Returns the first match or None if no matches.
     If `all_matches` is set to True, return a list of matches or
     an empty list on no matches.
     """

@@ -146,6 +146,58 @@ configuration (dictionary) consiting of the following keys:
 * **create_context**: (string) The parent DN under which the group should be 
   created if the **create_group** option is set to `true`.
 
+----------------
+Kiki Provisioner
+----------------
+
+The Kiki provisioner is actually a provisioner delivery service or a 
+"provisioner-provisioner".  It accepts a provisioning message from a source,
+possibly looks up some attributes related to the subject, packages the results
+in a new message, and sends the new message to an exchange with a new routing
+key determined from the old message.
+
+""""""""""""""""""""""""""""
+Provisioning Message Parsing
+""""""""""""""""""""""""""""
+
+Because provisioning messages can come from different sources, their message
+formats may be wildly different.  The Kiki service determines how to parse
+the message into a format it can use based on the characteristics of the
+received message.  In practice, this means that the exchange and routing key
+used to deliver the message can be mapped to a specific parsing strategy.
+
+Parsers include:
+
+* PyChangeLoggerParser
+* SubjectAttributeUpdateParser
+
+Mapping is controlled via the :option:`parse_map` option set in the 
+*PROVISIONER* section.  This option should point to a JSON file that
+specifies a sequence of exchange and routing key patterns that map to
+a specific strategy.  For example::
+
+    [
+        {
+            "exchange": "test_exchange",
+            "route_key": "kiki[.]grouper[.]orgsync",
+            "parser": "pychangelogger_parser"
+        },
+        {
+            "exchange": "test_exchange",
+            "route_key": "kiki[.]entity_change_notifier[.]orgsync",
+            "parser": "subject_attribute_parser"
+        }
+    ]
+
+The `exchange` and `route_key` keys of each stanza are regular expressions
+that must match the actual exchange and route key in order to select that
+parser.  The stanzas are tried in order, and the first match is selected.
+If no stanzas match, the message will not be parsed, and the message will
+be re-queued.
+
+
+
+
 =======
 Running
 =======

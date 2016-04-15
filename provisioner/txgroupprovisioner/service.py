@@ -271,13 +271,11 @@ class GroupProvisionerService(Service):
         if service_state.stopping or not service_state.read_from_queue:
             returnValue(None) 
         log.debug('Received: "{msg}" from channel # {channel}.', msg=msg.content.body, channel=channel.id)
-        msg_body = msg.content.body
-        tag, unk0, unk1, exchange_name, route_key = msg.fields
         delay = 0
         recorded = False
         while not recorded and service_state.read_from_queue and not service_state.stopping:
             try:
-                yield task.deferLater(reactor, delay, provisioner.provision, route_key, msg_body)
+                yield task.deferLater(reactor, delay, provisioner.provision, msg)
             except Exception as ex:
                 log.error("Could not record message from queue.  Error was: {error}", error=ex)
                 delay = min(600, max(delay+20, delay*2))

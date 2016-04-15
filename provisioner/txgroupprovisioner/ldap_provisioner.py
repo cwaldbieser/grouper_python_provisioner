@@ -215,11 +215,12 @@ class LDAPProvisioner(object):
                     raise
 
     @inlineCallbacks
-    def provision(self, route_key, message):
+    def provision(self, msg):
         """
-        Provision an entry based on the original route key and the raw message.
+        Provision an entry based on an AMQP message.
         """
         log = self.log
+        message = msg.content.body
         parts = message.split("\n")
         if len(parts) != 3:
             log.warn("Invalid message received.  Discarding.  Message was {msg}.", 
