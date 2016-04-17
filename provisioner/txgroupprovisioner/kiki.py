@@ -8,6 +8,7 @@ from twisted.internet.defer import (
     returnValue,
 )
 from twisted.enterprise import adbapi
+from twisted.internet.endpoints import clientFromString, connectProtocol
 from twisted.logger import Logger
 from twisted.plugin import IPlugin
 from zope.interface import implements
@@ -24,6 +25,7 @@ from utils import get_plugin_factory
 #
 from twisted.internet.endpoints import clientFromString, connectProtocol
 from txamqp.client import TwistedDelegate
+from txamqp.content import Content
 from txamqp.protocol import AMQClient
 from txamqp.queue import Closed as QueueClosedError
 import txamqp.spec
@@ -233,6 +235,9 @@ class KikiProvisioner(Interface):
         conn = yield connectProtocol(e, amqp_protocol)
         yield conn.authenticate(user, passwd)
         channel = yield conn.channel(1)
-        # TODO: Send message to exchange.
-
+        msg = Content(serialized)
+        channel.basic_publish(
+            exchange=exchange,
+            content=msg,
+            routing_key=route_key)
         
