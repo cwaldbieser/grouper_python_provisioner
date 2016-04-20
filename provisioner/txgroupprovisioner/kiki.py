@@ -54,6 +54,7 @@ class KikiProvisioner(Interface):
 
     service_state = None
 
+    @inlineCallbacks
     def load_config(self, config_file, default_log_level, logObserverFactory):
         """                                                             
         Load the configuration for this provisioner and initialize it.  
@@ -79,6 +80,17 @@ class KikiProvisioner(Interface):
         # Load parse map.
         parser_map_filename = config["parser_map"]
         self.load_parser_map(parser_map_filename)
+        # Connect to exchange for publishing.
+        section = "AMQP_TARGET"
+        publisher_config = section2dict(scp, section)
+        self.pub_exchange = publisher_config["exchange"]
+        self.pub_vhost = publisher_config["vhost"]
+        self.pub_user = publisher_config["user"]
+        self.pub_passwd = publisher_config["passwd"]
+        self.pub_endpoint_s = publisher_config["endpoint"]
+        spec_path = publisher_config["spec"]
+        self.pub_spec = txamqp.spec.load(spec_path)
+        yield self.connect_to_exchange() 
                      
     @inlineCallbacks                                                   
     def provision(self, amqp_message):             
@@ -180,6 +192,27 @@ class KikiProvisioner(Interface):
                 exchange_name,
                 route_key))
 
+    @inlineCallbacks
+    def connect_to_exchange(self):
+        """
+        Connect to an AMQP exchange as a publisher.
+        """
+        exchange = self.pub_exchange
+        vhost = self.pub_vhost
+        user = self.pub_user
+        passwd = self.pub_passwd
+        endpoint_s = self.pub_endpoint_s
+        spec = self.pub_spec
+        e = clientFromString(self.reactor, endpoint_s)
+        delegate = TwistedDelegate()
+        amqp_protocol = AMQClient(
+            delegate=delegate,
+            vhost=vhost,
+            spec=spec)
+        conn = yield connectProtocol(e, amqp_protocol)
+        yield conn.authenticate(user, passwd)
+        self.pub_channel = yield conn.channel(1)
+
     def query_subject(self, instructions):
         """
         Return a dictionary of attribute mappings for a subject.
@@ -212,6 +245,7 @@ class KikiProvisioner(Interface):
         Compose a provisioning message and deliver it to an exchange with
         routing key `route_key`.
         """
+        log = self.log
         message = {
             "action": instructions.action,
             "subject": instructions.subject
@@ -219,25 +253,40 @@ class KikiProvisioner(Interface):
         if instructions.requires_attributes:
             message["attributes"] = dict(instructions.attributes)
         serialized = json.dumps(message)
-        exchange = self.exchange
-        vhost = self.vhost
-        user = self.user
-        passwd = self.passwd
-        endpoint_s = self.endpoint_s
-        spec = self.spec
-        endpoint_s = args.endpoint
-        e = clientFromString(self.reactor, endpoint_s)
-        delegate = TwistedDelegate()
-        amqp_protocol = AMQClient(
-            delegate=delegate,
-            vhost=vhost,
-            spec=spec)
-        conn = yield connectProtocol(e, amqp_protocol)
-        yield conn.authenticate(user, passwd)
-        channel = yield conn.channel(1)
         msg = Content(serialized)
-        channel.basic_publish(
-            exchange=exchange,
-            content=msg,
-            routing_key=route_key)
-        
+        msg["delivery mode"] = 2
+        success = False
+        reconnect = False
+        delay = 20
+        while not success:
+            try:
+                if reconnect:
+                    log.INFO("Attempting to recconect to publisher exchange ...")
+                    yield self.connect_to_exchange()
+                channel = self.pub_channel
+                channel.basic_publish(
+                    exchange=exchange,
+                    content=msg,
+                    routing_key=route_key)
+                success = True
+                reconnect = False
+            except Exception as ex:
+                log.warn("Error attempting to publish message: {error}", error=ex)
+                log.warn("Will attempt to reconnect.")
+                yield task.deferLater(reactor, delay, lambda x: None)
+                reconnect = True
+            
+def delay(reactor, seconds):
+    """
+    A Deferred that fires after `seconds` seconds.
+    """
+    yield task.deferLater(reactor, , provisioner.provision, msg)
+
+
+
+
+
+
+
+
+
