@@ -7,7 +7,6 @@ from twisted.internet.defer import (
     inlineCallbacks, 
     returnValue,
 )
-from twisted.enterprise import adbapi
 from twisted.internet.endpoints import clientFromString, connectProtocol
 from twisted.logger import Logger
 from twisted.plugin import IPlugin
@@ -25,6 +24,8 @@ from errors import (
 from interface import (
     IAttributeResolverFactory,
     IMessageParserFactory,
+    IProvisionerFactory,
+    IProvisioner,
 )
 from utils import get_plugin_factory
 
@@ -48,48 +49,56 @@ class KikiProvisionerFactory(object):
         return KikiProvisioner()
 
 
-class KikiProvisioner(Interface):                                          
+class KikiProvisioner(object):
     implements(IProvisioner)
 
     service_state = None
+    reactor = None
 
     @inlineCallbacks
     def load_config(self, config_file, default_log_level, logObserverFactory):
         """                                                             
         Load the configuration for this provisioner and initialize it.  
         """             
-        # Load config.
-        scp = load_config(config_file, defaults=self.get_config_defaults())
-        config = section2dict(scp, "PROVISIONER")
-        self.config = config
-        # Start logger.
-        log_level = config.get('log_level', default_log_level)
-        log = Logger(observer=logObserverFactory(log_level))
-        self.log = log
-        log.debug("Initialized logging for Kiki provisioner delivery service.",
-            event_type='init_provisioner_logging')
-        # Load and configure the attribute resolver.
-        attrib_resolver_tag = config["attrib_resolver"]
-        factory = get_plugin_factory(attrib_resolver_tag, IAttributeResolverFactory)
-        if factory is None:
-            raise UnknownAttributeResolverError(
-                "The attribute resolver identified by tag '{0}' is unknown.".format(
-                    attrib_resolver_tag))
-        attrib_resolver = factory.generateResolver(scp)
-        # Load parse map.
-        parser_map_filename = config["parser_map"]
-        self.load_parser_map(parser_map_filename)
-        # Connect to exchange for publishing.
-        section = "AMQP_TARGET"
-        publisher_config = section2dict(scp, section)
-        self.pub_exchange = publisher_config["exchange"]
-        self.pub_vhost = publisher_config["vhost"]
-        self.pub_user = publisher_config["user"]
-        self.pub_passwd = publisher_config["passwd"]
-        self.pub_endpoint_s = publisher_config["endpoint"]
-        spec_path = publisher_config["spec"]
-        self.pub_spec = txamqp.spec.load(spec_path)
-        yield self.connect_to_exchange() 
+        try:
+            # Load config.
+            scp = load_config(config_file, defaults=self.get_config_defaults())
+            config = section2dict(scp, "PROVISIONER")
+            self.config = config
+            # Start logger.
+            log_level = config.get('log_level', default_log_level)
+            log = Logger(observer=logObserverFactory(log_level))
+            self.log = log
+            log.debug("Initialized logging for Kiki provisioner delivery service.",
+                event_type='init_provisioner_logging')
+            # Load and configure the attribute resolver.
+            attrib_resolver_tag = config["attrib_resolver"]
+            factory = get_plugin_factory(attrib_resolver_tag, IAttributeResolverFactory)
+            if factory is None:
+                raise UnknownAttributeResolverError(
+                    "The attribute resolver identified by tag '{0}' is unknown.".format(
+                        attrib_resolver_tag))
+            attrib_resolver = factory.generate_attribute_resolver(scp)
+            attrib_resolver.log = self.log
+            self.attrib_resolver = attrib_resolver
+            # Load parse map.
+            parser_map_filename = config["parser_map"]
+            self.load_parser_map(parser_map_filename)
+            # Connect to exchange for publishing.
+            section = "AMQP_TARGET"
+            publisher_config = section2dict(scp, section)
+            self.pub_exchange = publisher_config["exchange"]
+            self.pub_vhost = publisher_config["vhost"]
+            self.pub_user = publisher_config["user"]
+            self.pub_passwd = publisher_config["passwd"]
+            self.pub_endpoint_s = publisher_config["endpoint"]
+            spec_path = publisher_config["spec"]
+            self.pub_spec = txamqp.spec.load(spec_path)
+            yield self.connect_to_exchange() 
+        except Exception as ex:
+            d = self.reactor.callLater(0, self.reactor.stop)
+            log.failure("Provisioner failed to initialize: {0}".format(ex))
+            raise
                      
     @inlineCallbacks                                                   
     def provision(self, amqp_message):             
@@ -219,7 +228,8 @@ class KikiProvisioner(Interface):
         # Attributes requested/returned should be based on some kind of 
         # filter / mapping / logic.
         subject = instructions.subject
-        return {}
+        attributes = self.attrib_resolver.resolve_attributes(subject)
+        return attributes
 
     def get_target_route_key(self, msg):
         """
@@ -279,7 +289,7 @@ def delay(reactor, seconds):
     """
     A Deferred that fires after `seconds` seconds.
     """
-    yield task.deferLater(reactor, , provisioner.provision, msg)
+    yield task.deferLater(reactor, seconds, provisioner.provision, msg)
 
 
 

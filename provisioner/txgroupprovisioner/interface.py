@@ -20,6 +20,7 @@ class IProvisioner(Interface):
         """
         Load the configuration for this provisioner and initialize it.
         This method is called *before* the main event reactor is started.
+        Returns a Deferred that fires when configuration is complete.
         """
 
     def provision(message):

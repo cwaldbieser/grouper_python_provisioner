@@ -58,32 +58,15 @@ The configuration sections and options are below.
       Examples:
         * tcp:host=localhost:port=5672
         * ssl:host=localhost:port=5672:caCertsDir=/etc/ssl/certs
-    * **exchange**: The service configures an exchange that will route
-      messages to one or more queues.
     * **vhost**: The virtual host on the AMQP host to which this service connects.
     * **user**: The username credential used to access the AMQP service.
     * **passwd**: The password credential used to access the AMQP service.
     * **queue**: The queue from which the provisioner reads messages.
-    * **route_map**: A JSON config file that specifies bindings the exchange uses
-      to route messages to queues.
 * *SSH*
     * **endpoint**: Service endpoint string for SSH admin service.  E.g. `tcp:2023`.
     * **group**: Local group an account must belong to in order to access
       the administrative interface.
 * *PROVISIONER* (see below)
-
------------------------
-Route Map Configuration
------------------------
-
-The file :file:`queuemap.json.example` is an example route map configuration.
-The file must be a JSON file that maps queues to route keys.  Since a queue
-may be mapped to more than one route key, the format is a list of queue to
-route key pairs.
-
-Bindings may be declared for queues other than the one from which the service 
-reads.  This is useful if multiple provisioner services share a common route map
-configuration.
 
 =====================
 Provisioner Back Ends
@@ -156,6 +139,15 @@ possibly looks up some attributes related to the subject, packages the results
 in a new message, and sends the new message to an exchange with a new routing
 key determined from the old message.
 
+To use this provisioner, set the :option:`provisioner` option under the 
+`APPLICATION` section to "kiki".
+
+This provisioner supports the following options in the `PROVISIONER` section:
+* :option:`attrib_resolver` (required) - The tag that identifies an attribute
+  resolver that will fetch the attributes for a given subject.
+* :option:`parse_map` (required) - A configuration file that maps received
+  messages to a particular type of message parser (see below).
+
 """"""""""""""""""""""""""""
 Provisioning Message Parsing
 """"""""""""""""""""""""""""
@@ -195,6 +187,31 @@ parser.  The stanzas are tried in order, and the first match is selected.
 If no stanzas match, the message will not be parsed, and the message will
 be re-queued.
 
+"""""""""""""""""""
+Attribute Resolvers
+"""""""""""""""""""
+
+;;;;;;;;;;;;;;;;;;;;;;;;
+RDBMS Attribute Resolver
+;;;;;;;;;;;;;;;;;;;;;;;;
+
+The RDBMS attribute resolver looks up attributes from a RDBMS using drivers
+provided by the standard DBAPI2 interface.  This resolver expects to find
+its configuration options located under the `RDBMS Attribute Resolver` section
+of the main provisioner configuration file.  The options are as follows:
+
+* :option:`query` (required) - A SQL query that returns rows of attribute
+  name-value pairs.  Multi-valued attributes will have a row for each value.
+  The query should take a single parameter, which is the subject.
+* :option:`driver` (required) - The name of the DBAPI2 driver module name that
+  will provide the underlying database connection.
+* :option:`named_param` (optional) - Some DB drivers require that parameters be
+  provided as mapped keywords rather than positional arguments.  If this is
+  the case, this option specifies the key mapped to the subject value.
+
+All other options will be passed directly to the database driver (e.g. `host`
+and `port` for a MySQL connection, the `database` for an sqlite3 connection,
+etc.).
 
 
 
