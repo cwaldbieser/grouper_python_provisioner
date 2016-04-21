@@ -14,10 +14,12 @@ class IProvisionerFactory(Interface):
 
 class IProvisioner(Interface):
     service_state = Attribute("Shared service state.")
+    reactor = Attribute("The reactor used by the provisioner.")
 
     def load_config(config_file, default_log_level, logObserverFactory):
         """
         Load the configuration for this provisioner and initialize it.
+        This method is called *before* the main event reactor is started.
         """
 
     def provision(message):

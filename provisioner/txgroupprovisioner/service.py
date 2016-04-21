@@ -9,8 +9,6 @@ import os
 import os.path
 import sys
 from textwrap import dedent
-# External modules
-# - Twisted
 from twisted.application import service
 from twisted.application.service import Service
 from twisted.internet import reactor, task
@@ -21,7 +19,6 @@ from txamqp.client import TwistedDelegate
 from txamqp.protocol import AMQClient
 from txamqp.queue import Closed as QueueClosedError
 import txamqp.spec
-# - application
 from config import load_config, section2dict
 from interface import IProvisionerFactory
 from logging import make_syslog_observer, make_file_observer
@@ -52,7 +49,7 @@ class GroupProvisionerService(Service):
         """
         if a_reactor is None:
             a_reactor = reactor
-        self._reactor = a_reactor
+        self.reactor = a_reactor
         self._port = None
         self.service_state = ServiceState()
         self.use_syslog = use_syslog
@@ -94,7 +91,8 @@ class GroupProvisionerService(Service):
                 make_file_observer,
                 self.logfile)
         else:
-            raise Exception("No log observer factory!")    
+            msg = "No log is available.  Please specify a log file or the `--syslog` option."
+            raise Exception(msg)    
         
     def startService(self):
         """
@@ -117,9 +115,12 @@ class GroupProvisionerService(Service):
         log.info("Provisioner tag => '{provisioner}'", provisioner=provisioner_tag)
         provisioner_factory = get_plugin_factory(provisioner_tag, IProvisionerFactory)
         if provisioner_factory is None:
-            log.error("No provisioner factory was found!")
-            sys.exit(1)
+            msg = "No provisioner factory was found!"
+            log.error(msg)
+            d = self.reactor.callLater(0, self.reactor.stop)
+            raise Exception(msg)
         provisioner = provisioner_factory.generateProvisioner()
+        provisioner.reactor = self.reactor
         provisioner.service_state = service_state
         provisioner.load_config(
             self.config, 
@@ -132,46 +133,29 @@ class GroupProvisionerService(Service):
             web_log_level = web_info.get("log_level", log_level)
         self.web_log = Logger(observer=self.logObserverFactory(web_log_level))
 
-    def parse_bindings(self, fname):
-        """
-        Queue map should be a JSON list of (queue_name, route_key) mappings.
-        """
-        with open(fname, "r") as f:
-            o = load(f)
-            return o
-
     def start_amqp_client(self):
         amqp_info = self.amqp_info
         log = self.amqp_log
         endpoint_str = amqp_info['endpoint']
-        exchange = amqp_info['exchange']
         vhost = amqp_info['vhost']
         spec_path = amqp_info['spec']
         queue_name = amqp_info['queue']
-        route_file = amqp_info['route_map']
         user = amqp_info['user']
         passwd = amqp_info['passwd']
         creds = (user, passwd)
-        bindings = self.parse_bindings(route_file)
-        queue_names = set([q for q, rk in bindings])
-        queue_names.add(queue_name)
         log.debug(
-            "endpoint='{endpoint}', exchange='{exchange}', vhost='{vhost}', user='{user}, spec={spec}'",
-            endpoint=endpoint_str, exchange=exchange, vhost=vhost, user=user, spec=spec_path)
-        for q in sorted(queue_names):
-            log.debug("Declared: queue='{queue}'", queue=q)
-        for q, rk in bindings:
-            log.debug("Binding: queue='{queue}', route_key='{route_key}'", queue=q, route_key=rk)
+            "endpoint='{endpoint}', vhost='{vhost}', user='{user}, spec={spec}', queue={queue}",
+            endpoint=endpoint_str, vhost=vhost, user=user, spec=spec_path, queue=queue_name)
         delegate = TwistedDelegate()
         spec = txamqp.spec.load(spec_path)
-        ep = clientFromString(self._reactor, endpoint_str)
+        ep = clientFromString(self.reactor, endpoint_str)
         d = connectProtocol(
             ep, 
             AMQClient( 
                 delegate=delegate, 
                 vhost=vhost, 
                 spec=spec))
-        d.addCallback(self.on_amqp_connect, exchange, queue_name, queue_names, bindings, creds)
+        d.addCallback(self.on_amqp_connect, queue_name, creds)
 
         def onError(err):
             if reactor.running:
@@ -181,7 +165,7 @@ class GroupProvisionerService(Service):
         d.addErrback(onError)
 
     @inlineCallbacks
-    def on_amqp_connect(self, conn, exchange, queue_name, queue_names, bindings, creds):
+    def on_amqp_connect(self, conn, queue_name, creds):
         log = self.amqp_log
         provisioner = self.provisioner
         service_state = self.service_state
@@ -194,21 +178,14 @@ class GroupProvisionerService(Service):
         self.amqpChannel = channel
         yield channel.channel_open()
         log.info("Channel opened.")
-        for name in queue_names:
-            yield channel.queue_declare(queue=name, durable=True)
+        yield channel.queue_declare(queue=queue_name, durable=True)
         log.info("Queues declared.")
-        yield channel.exchange_declare(exchange=exchange, type='topic')
-        log.info("Exchange declared.")
-        for qname, route_key in bindings:
-            yield channel.queue_bind(exchange=exchange, queue=qname, routing_key=route_key)
-        log.info("Routings have been mapped.")
         self.createAMQPMessageLoop()
         self.startAMQPMessageLoop()
 
     def createAMQPMessageLoop(self):
         log = self.amqp_log
-        amqpLooper = task.LoopingCall(self.processAMQPMessage)
-        self.amqpLooper = amqpLooper
+        slef.amqpLooper = task.LoopingCall(self.processAMQPMessage)
 
     def startAMQPMessageLoop(self):
         stopping = self.service_state.stopping
@@ -256,7 +233,7 @@ class GroupProvisionerService(Service):
     def processAMQPMessage(self):
         channel = self.amqpChannel
         queue = self.amqpQueue
-        reactor = self._reactor
+        reactor = self.reactor
         log = self.amqp_log
         provisioner = self.provisioner
         service_state = self.service_state
@@ -329,7 +306,6 @@ class GroupProvisionerService(Service):
             [AMQP]
             log_level = INFO
             endpoint = tcp:host=localhost:port=5672
-            exchange = grouper_exchange
             vhost = /
             spec = {spec_path}
             user = guest
@@ -340,17 +316,3 @@ class GroupProvisionerService(Service):
 def total_seconds(td):
     return float((td.microseconds + (td.seconds + td.days * 24 * 3600) * 10**6)) / 10**6    
 
-def main():
-    service = GroupProvisionerService()
-    service.startService()
-    reactor.run()
-
-if __name__ == "__main__":
-    main()
-#else:
-#    application = service.Application("Twisted Group Provisioner")
-#    service = GroupProvisionerService()
-#    service.setServiceParent(application)
-    
-    
-    

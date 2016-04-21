@@ -1,14 +1,11 @@
 
 from __future__ import print_function
-# Standard library
 import argparse
 import sys
-# Application modules
 from txgroupprovisioner.admin import SSHAdminService
 from txgroupprovisioner.config import load_config, section2dict
 from txgroupprovisioner.service import GroupProvisionerService
 from txgroupprovisioner.web import WebService
-# External modules
 from twisted.application import internet
 from twisted.application.service import IServiceMaker, MultiService
 from twisted.plugin import getPlugins, IPlugin
@@ -100,11 +97,16 @@ class MyServiceMaker(object):
         if ssh_public_key is None:
             ssh_public_key = 'keys/id_rsa.pub'
         # Create the service.
-        groupService = GroupProvisionerService(
-            config=config, 
-            use_syslog=args.syslog, 
-            syslog_prefix=args.prefix,
-            logfile=args.logfile)
+        try:
+            groupService = GroupProvisionerService(
+                config=config, 
+                use_syslog=args.syslog, 
+                syslog_prefix=args.prefix,
+                logfile=args.logfile)
+        except Exception as ex:
+            print("Unable to create the group provisioner service: {0}".format(
+                ex), file=sys.stderr)
+            sys.exit(1)
         if ssh_endpoint_str is None and web_endpoint_str is None:
             rootService = groupService
         else:

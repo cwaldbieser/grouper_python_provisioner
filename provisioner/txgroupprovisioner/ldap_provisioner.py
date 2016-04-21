@@ -1,4 +1,17 @@
 
+from __future__ import print_function
+from collections import Mapping, namedtuple
+import contextlib
+import datetime
+import exceptions
+from json import load
+import os
+import os.path
+from textwrap import dedent
+from config import load_config, section2dict
+import sqlite3
+import sys
+import urlparse
 from jinja2 import Template
 from ldaptor.protocols import pureldap
 from ldaptor.protocols.ldap import ldapclient, ldapsyntax, ldapconnector
@@ -8,21 +21,10 @@ from twisted.plugin import IPlugin
 from zope.interface import implements
 from twisted.enterprise import adbapi
 from twisted.internet.defer import gatherResults, inlineCallbacks, returnValue
-from twisted.internet import reactor, task, threads
+from twisted.internet import task, threads
 from twisted.internet.task import LoopingCall
 from twisted.logger import Logger
 from txgroupprovisioner.interface import IProvisionerFactory, IProvisioner
-from collections import Mapping, namedtuple
-import contextlib
-import datetime
-from json import load
-import os
-import os.path
-from textwrap import dedent
-from config import load_config, section2dict
-import sqlite3
-import sys
-import urlparse
 
 LDAPGroupTarget = namedtuple("LDAPTargetGroup", ['group', 'create_group', 'create_context'])
 
@@ -324,7 +326,7 @@ class LDAPProvisioner(object):
         ldap_port = self.ldap_port
         bind_dn = config.get('bind_dn', None)
         bind_passwd = config.get('passwd', None)
-        c = ldapconnector.LDAPClientCreator(reactor, ldapclient.LDAPClient)
+        c = ldapconnector.LDAPClientCreator(self.reactor, ldapclient.LDAPClient)
         overrides = {base_dn: (ldap_host, ldap_port)}
         client = yield c.connect(base_dn, overrides=overrides)
         log.debug(
@@ -649,12 +651,18 @@ class LDAPProvisioner(object):
 
     def load_group_map(self, gm):
         log = self.log
-        with open(gm, "r") as f:
-            try:
-                o = load(f)
-            except Exception as ex:
-                log.failure("Error reading group mapping.")
-                sys.exit(1)
+        try:
+            with open(gm, "r") as f:
+                try:
+                    o = load(f)
+                except Exception as ex:
+                    log.failure("Error reading group mapping.")
+                    d = self.reactor.callLater(0, self.reactor.stop)
+                    raise
+        except exceptions.IOError as ex:
+            log.failure("Error opening group map file '{0}': {1}".format(gm, ex))
+            d = self.reactor.callLater(0, self.reactor.stop)
+            raise 
         direct_map = {}
         stem_map = {}
         for group, value in o.iteritems():

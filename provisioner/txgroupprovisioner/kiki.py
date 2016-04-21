@@ -11,6 +11,11 @@ from twisted.enterprise import adbapi
 from twisted.internet.endpoints import clientFromString, connectProtocol
 from twisted.logger import Logger
 from twisted.plugin import IPlugin
+from txamqp.client import TwistedDelegate
+from txamqp.content import Content
+from txamqp.protocol import AMQClient
+from txamqp.queue import Closed as QueueClosedError
+import txamqp.spec
 from zope.interface import implements
 from config import load_config, section2dict
 from errors import (
@@ -22,18 +27,12 @@ from interface import (
     IMessageParserFactory,
 )
 from utils import get_plugin_factory
-#
-from twisted.internet.endpoints import clientFromString, connectProtocol
-from txamqp.client import TwistedDelegate
-from txamqp.content import Content
-from txamqp.protocol import AMQClient
-from txamqp.queue import Closed as QueueClosedError
-import txamqp.spec
-#
+
 
 ParserMatcher = namedtuple(
     'ParserMatcher',
     ['exchange_pattern', 'route_key_pattern', 'parser'])
+
 
 class KikiProvisionerFactory(object):
     implements(IPlugin, IProvisionerFactory)
