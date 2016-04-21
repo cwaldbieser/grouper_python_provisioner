@@ -8,3 +8,4 @@ twisted/plugins/dropin.cache
 pyenv/
 keys/
 conf.d/
+_*
