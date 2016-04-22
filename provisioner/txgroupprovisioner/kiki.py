@@ -58,6 +58,7 @@ class KikiProvisioner(object):
 
     service_state = None
     reactor = None
+    log = None
 
     @inlineCallbacks
     def load_config(self, config_file, default_log_level, logObserverFactory):

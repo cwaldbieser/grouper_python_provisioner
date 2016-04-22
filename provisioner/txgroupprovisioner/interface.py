@@ -15,6 +15,7 @@ class IProvisionerFactory(Interface):
 class IProvisioner(Interface):
     service_state = Attribute("Shared service state.")
     reactor = Attribute("The reactor used by the provisioner.")
+    log = Attribute("A logger used by the provisioner.")
 
     def load_config(config_file, default_log_level, logObserverFactory):
         """
