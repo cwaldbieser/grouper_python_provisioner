@@ -177,7 +177,7 @@ a specific strategy.  For example::
         {
             "exchange": "test_exchange",
             "route_key": "kiki[.]entity_change_notifier[.]orgsync",
-            "parser": "subject_attribute_parser"
+            "parser": "subject_parser"
         }
     ]
 
