@@ -145,7 +145,7 @@ To use this provisioner, set the :option:`provisioner` option under the
 This provisioner supports the following options in the `PROVISIONER` section:
 * :option:`attrib_resolver` (required) - The tag that identifies an attribute
   resolver that will fetch the attributes for a given subject.
-* :option:`parse_map` (required) - A configuration file that maps received
+* :option:`parser_map` (required) - A configuration file that maps received
   messages to a particular type of message parser (see below).
 
 """"""""""""""""""""""""""""
@@ -163,7 +163,7 @@ Parsers include:
 * PyChangeLoggerParser
 * SubjectAttributeUpdateParser
 
-Mapping is controlled via the :option:`parse_map` option set in the 
+Mapping is controlled via the :option:`parser_map` option set in the 
 *PROVISIONER* section.  This option should point to a JSON file that
 specifies a sequence of exchange and routing key patterns that map to
 a specific strategy.  For example::

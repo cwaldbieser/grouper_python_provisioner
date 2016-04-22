@@ -1,6 +1,8 @@
 
 from __future__ import print_function
 from collections import namedtuple
+import json
+import os
 import re
 from textwrap import dedent
 from twisted.internet.defer import (
@@ -18,8 +20,9 @@ import txamqp.spec
 from zope.interface import implements
 from config import load_config, section2dict
 from errors import (
-    UnknownAttributeResolverError,
+    OptionMissingError,
     NoMatchingMessageParserError,
+    UnknownAttributeResolverError,
 )
 from interface import (
     IAttributeResolverFactory,
@@ -60,6 +63,7 @@ class KikiProvisioner(object):
         """                                                             
         Load the configuration for this provisioner and initialize it.  
         """             
+        log = Logger(observer=logObserverFactory("ERROR"))
         try:
             # Load config.
             scp = load_config(config_file, defaults=self.get_config_defaults())
@@ -87,12 +91,17 @@ class KikiProvisioner(object):
             # Connect to exchange for publishing.
             section = "AMQP_TARGET"
             publisher_config = section2dict(scp, section)
-            self.pub_exchange = publisher_config["exchange"]
-            self.pub_vhost = publisher_config["vhost"]
-            self.pub_user = publisher_config["user"]
-            self.pub_passwd = publisher_config["passwd"]
-            self.pub_endpoint_s = publisher_config["endpoint"]
-            spec_path = publisher_config["spec"]
+            try:
+                self.pub_exchange = publisher_config["exchange"]
+                self.pub_vhost = publisher_config["vhost"]
+                self.pub_user = publisher_config["user"]
+                self.pub_passwd = publisher_config["passwd"]
+                self.pub_endpoint_s = publisher_config["endpoint"]
+                spec_path = publisher_config["spec"]
+            except KeyError as ex:
+                raise OptionMissingError(
+                    "A require option was missing: '{0}:{1}'.".format(
+                        section, ex.args[0]))
             self.pub_spec = txamqp.spec.load(spec_path)
             yield self.connect_to_exchange() 
         except Exception as ex:
@@ -118,6 +127,8 @@ class KikiProvisioner(object):
         """
         Return option defaults.
         """
+        spec_dir = os.path.join(os.path.split(os.path.split(__file__)[0])[0], "spec")
+        spec_path = os.path.join(spec_dir, "amqp0-9-1.stripped.xml")
         return dedent("""\
             [PROVISIONER]
             parser_map = parser_map.json
@@ -131,10 +142,11 @@ class KikiProvisioner(object):
             vhost = /
             user = guest
             passwd = guest
+            spec = {spec_path}
 
             [KIKI_RDMS]
             driver = sqlite3
-            """)
+            """).format(spec_path=spec_path)
 
     def load_parser_map(self, parser_map_filename):
         """
@@ -155,7 +167,7 @@ class KikiProvisioner(object):
             if not valid:
                 continue
             try:
-                exchange = re.parse(entry["exchange"])
+                exchange = re.compile(entry["exchange"])
             except re.error as ex:
                 log.error("Parser map entry {entry_index}: Exchange pattern '{exchange}' is not a valid regular expression.  Error was {regex_error}.",
                     entry_index=entry_index,
@@ -163,7 +175,7 @@ class KikiProvisioner(object):
                     regex_error=ex)
                 valid = False
             try:
-                route_key = entry["route_key"]
+                route_key = re.compile(entry["route_key"])
             except re.error as ex:
                 log.error("Parser map entry {entry_index}: Route key pattern '{route_key}' is not a valid regular expression.  Error was {regex_error}.",
                     entry_index=entry_index,

@@ -15,11 +15,13 @@ from twisted.internet import reactor, task
 from twisted.internet.defer import inlineCallbacks, returnValue, DeferredList
 from twisted.internet.endpoints import clientFromString, connectProtocol
 from twisted.logger import Logger
+from twisted.python import filepath
 from txamqp.client import TwistedDelegate
 from txamqp.protocol import AMQClient
 from txamqp.queue import Closed as QueueClosedError
 import txamqp.spec
 from config import load_config, section2dict
+from errors import EndpointError
 from interface import IProvisionerFactory
 from logging import make_syslog_observer, make_file_observer
 from utils import get_plugin_factory
@@ -148,7 +150,14 @@ class GroupProvisionerService(Service):
             endpoint=endpoint_str, vhost=vhost, user=user, spec=spec_path, queue=queue_name)
         delegate = TwistedDelegate()
         spec = txamqp.spec.load(spec_path)
-        ep = clientFromString(self.reactor, endpoint_str)
+        try:
+            ep = clientFromString(self.reactor, endpoint_str)
+        except filepath.UnlistableError as ex:
+            msg = "One of the file paths in endpoint string '{0}' could not be listed.".format(
+                endpoint_str)
+            d = self.reactor.callLater(0, self.reactor.stop)
+            raise EndpointError(msg)
+            
         d = connectProtocol(
             ep, 
             AMQClient( 
