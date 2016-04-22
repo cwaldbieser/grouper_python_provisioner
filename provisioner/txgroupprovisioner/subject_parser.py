@@ -2,8 +2,7 @@
 from twisted.plugin import IPlugin
 from zope.interface import implements
 from kikimessage import (
-    ADD_ACTION,
-    DELETE_ACTION,
+    UPDATE_ACTION,
     Instructions,
 )
 from txgroupprovisioner.interface import (
@@ -12,15 +11,15 @@ from txgroupprovisioner.interface import (
 )
 
 
-class PyChangeloggerMessageParserFactory(object):
+class SubjectMessageParserFactory(object):
     implements(IPlugin, IMessageParserFactory)
-    tag = "pychangelogger_parser"
+    tag = "subject_parser"
 
     def generate_message_parser(self, **kwds):
-        return PyChangeloggerMessageParser(**kwds)
+        return SubjectMessageParser(**kwds)
 
 
-class PyChangeloggerMessageParser(object):
+class SubjectMessageParser(object):
     implements(IPlugin, IMessageParser)
 
     def parse_message(self, msg):
@@ -29,18 +28,10 @@ class PyChangeloggerMessageParser(object):
         downstream provisioner message.
         """
         body = msg.content.body
-        parts = body.split("\n")
-        group = parts[0]
-        subject = parts[1]
-        action = parts[2]
-        if action.startswith("delete"):
-            requires_attributes = False
-            attributes = None
-            action = DELETE_ACTION
-        else:
-            requires_attributes = True
-            attributes = {}
-            action = ADD_ACTION
+        subject = body.strip("\n")
+        action = UPDATE_ACTION
+        requires_attributes = True
+        attributes = {}
         instructions = Instructions(
             subject,
             action,

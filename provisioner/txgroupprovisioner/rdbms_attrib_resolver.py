@@ -32,6 +32,8 @@ class RDBMSAttributeResolverFactory(object):
         for opt in options:
             if opt not in ('driver', 'query', 'named_param'):
                 driver_options[opt] = config_parser.get(section, opt)
+        if driver == 'sqlite3':
+            driver_options['check_same_thread'] = False
         dbpool = adbapi.ConnectionPool(driver, **driver_options)
         resolver.dbpool = dbpool
         resolver.query = query

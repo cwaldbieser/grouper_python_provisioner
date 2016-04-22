@@ -5,6 +5,7 @@ import json
 import os
 import re
 from textwrap import dedent
+from twisted.internet import task
 from twisted.internet.defer import (
     inlineCallbacks, 
     returnValue,
@@ -114,14 +115,19 @@ class KikiProvisioner(object):
         """                                                
         Provision an entry based on an AMQP message.  
         """                                              
-        msg_parser = self.get_message_parser(amqp_message)
-        instructions = msg_parser.parse_message(amqp_message)
-        attribs = {}
-        if instructions.requires_attributes:
-            attribs = yield self.query_subject(instructions)
-            instructions.attributes.update(attribs)
-        target_route_key = self.get_target_route_key(amqp_message)
-        yield self.send_message(target_route_key, instructions)
+        log = self.log
+        try:
+            msg_parser = self.get_message_parser(amqp_message)
+            instructions = msg_parser.parse_message(amqp_message)
+            attribs = {}
+            if instructions.requires_attributes:
+                attribs = yield self.query_subject(instructions)
+                instructions.attributes.update(attribs)
+            target_route_key = self.get_target_route_key(amqp_message)
+            yield self.send_message(target_route_key, instructions)
+        except Exception as ex:
+            log.warn("Error provisioning target: {error}", error=ex)
+            raise
 
     def get_config_defaults(self):
         """
@@ -192,7 +198,7 @@ class KikiProvisioner(object):
                 entry_index=entry_index,
                 parser_tag=parser_tag)
                 continue
-            parser = factory.generateParser(**parser_args)
+            parser = factory.generate_message_parser(**parser_args)
             matcher = ParserMatcher(exchange, route_key, parser)
             self.parser_mappings.append(matcher)
 
@@ -201,7 +207,7 @@ class KikiProvisioner(object):
         Return a message parser (IMessageParser) based on the message
         characteristics.
         """
-        consumer_tag, delivery_tag, redelivered, exchange_name, route_key = amqp_message.fields
+        consumer_tag, delivery_tag, redelivered, exchange_name, route_key = msg.fields
         parser_mappings = self.parser_mappings
         for exchange_pattern, route_pattern, parser in parser_mappings:
             if exchange_pattern.match(exchange_name) is not None:
@@ -229,9 +235,16 @@ class KikiProvisioner(object):
             delegate=delegate,
             vhost=vhost,
             spec=spec)
-        conn = yield connectProtocol(e, amqp_protocol)
+        try:
+            conn = yield connectProtocol(e, amqp_protocol)
+        except Exception:
+            self.log.failure(
+                "Failed to establish AMQP connection to endpoint '{0}'".format(
+                    endpoint_s))
+            raise
         yield conn.authenticate(user, passwd)
         self.pub_channel = yield conn.channel(1)
+        yield self.pub_channel.channel_open()
 
     def query_subject(self, instructions):
         """
@@ -257,8 +270,11 @@ class KikiProvisioner(object):
         consumer_tag, delivery_tag, redelivered, exchange_name, route_key = msg.fields
         parts = route_key.split(".")
         parts = parts[1:]
-        parts = parts[1:].append(parts[0])
-        return ".".join(parts)
+        head = parts[0]
+        parts = parts[1:]
+        parts.append(head)
+        result = ".".join(parts)
+        return result
 
     @inlineCallbacks
     def send_message(self, route_key, instructions):
@@ -267,6 +283,7 @@ class KikiProvisioner(object):
         routing key `route_key`.
         """
         log = self.log
+        exchange = self.pub_exchange
         message = {
             "action": instructions.action,
             "subject": instructions.subject
@@ -296,6 +313,14 @@ class KikiProvisioner(object):
                 log.warn("Will attempt to reconnect.")
                 yield task.deferLater(reactor, delay, lambda x: None)
                 reconnect = True
+        log.debug(
+            "Sent message to target exchange '{exchange}' with routing key '{route_key}'.",
+            event_type="amqp_send",
+            exchange=exchange,
+            route_key=route_key)
+        log.debug("Send message: {msg}",
+            event_type="amqp_send_msg",
+            msg=serialized)
             
 def delay(reactor, seconds):
     """

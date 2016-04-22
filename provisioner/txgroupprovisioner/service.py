@@ -194,7 +194,7 @@ class GroupProvisionerService(Service):
 
     def createAMQPMessageLoop(self):
         log = self.amqp_log
-        slef.amqpLooper = task.LoopingCall(self.processAMQPMessage)
+        self.amqpLooper = task.LoopingCall(self.processAMQPMessage)
 
     def startAMQPMessageLoop(self):
         stopping = self.service_state.stopping
