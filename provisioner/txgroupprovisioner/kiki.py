@@ -39,6 +39,11 @@ ParserMatcher = namedtuple(
     ['exchange_pattern', 'route_key_pattern', 'parser'])
 
 
+RouteData = namedtuple(
+    'RouteData',
+    ['route_key', 'attributes_required'])
+
+
 class KikiProvisionerFactory(object):
     implements(IPlugin, IProvisionerFactory)
 
@@ -120,11 +125,10 @@ class KikiProvisioner(object):
         try:
             msg_parser = self.get_message_parser(amqp_message)
             instructions = msg_parser.parse_message(amqp_message)
-            attribs = {}
-            if instructions.requires_attributes:
+            target_route_key, attributes_required = yield self.get_route_info(instructions)
+            if attributes_required:
                 attribs = yield self.query_subject(instructions)
                 instructions.attributes.update(attribs)
-            target_route_key = self.get_target_route_key(amqp_message)
             yield self.send_message(target_route_key, instructions)
         except Exception as ex:
             log.warn("Error provisioning target: {error}", error=ex)
@@ -140,6 +144,7 @@ class KikiProvisioner(object):
             [PROVISIONER]
             parser_map = parser_map.json
             attrib_resolver = rdbms_attrib_resolver
+            group_filter = rdbms_group_filter
             
             [AMQP_TARGET]
             endpoint = tcp:host=127.0.0.1:port=5672
@@ -150,9 +155,6 @@ class KikiProvisioner(object):
             user = guest
             passwd = guest
             spec = {spec_path}
-
-            [KIKI_RDMS]
-            driver = sqlite3
             """).format(spec_path=spec_path)
 
     def load_parser_map(self, parser_map_filename):
@@ -247,6 +249,7 @@ class KikiProvisioner(object):
         self.pub_channel = yield conn.channel(1)
         yield self.pub_channel.channel_open()
 
+    @inlineCallbacks
     def query_subject(self, instructions):
         """
         Return a dictionary of attribute mappings for a subject.
@@ -254,28 +257,17 @@ class KikiProvisioner(object):
         # Attributes requested/returned should be based on some kind of 
         # filter / mapping / logic.
         subject = instructions.subject
-        attributes = self.attrib_resolver.resolve_attributes(subject)
-        return attributes
+        attributes = yield self.attrib_resolver.resolve_attributes(subject)
+        returnValue(attributes)
 
-    def get_target_route_key(self, msg):
+    @inlineCallbacks
+    def get_target_route_key(self, instructions):
         """
-        Get the target route key from the original route key.
-        This provisioner expects the original route key to be of the form:
-
-        KIKI.FROM.TARGET
-
-        It transforms the target key to:
-
-            TARGET.FROM
+        Get the target route key based on the instructions parsed from the 
+        original message.
+        Returns `RouteData` named tuple.
         """
-        consumer_tag, delivery_tag, redelivered, exchange_name, route_key = msg.fields
-        parts = route_key.split(".")
-        parts = parts[1:]
-        head = parts[0]
-        parts = parts[1:]
-        parts.append(head)
-        result = ".".join(parts)
-        return result
+        returnValue(RouteData("todo.route_key", False))
 
     @inlineCallbacks
     def send_message(self, route_key, instructions):
@@ -322,6 +314,10 @@ class KikiProvisioner(object):
         log.debug("Send message: {msg}",
             event_type="amqp_send_msg",
             msg=serialized)
+
+    def query_groups(self, instructions):
+        """
+        """
             
 def delay(reactor, seconds):
     """

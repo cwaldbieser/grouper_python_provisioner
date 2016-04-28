@@ -42,8 +42,9 @@ class PyChangeloggerMessageParser(object):
             attributes = {}
             action = ADD_ACTION
         instructions = Instructions(
-            subject,
             action,
+            group,
+            subject,
             requires_attributes,
             attributes)
         return instructions

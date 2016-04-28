@@ -30,11 +30,13 @@ class SubjectMessageParser(object):
         body = msg.content.body
         subject = body.strip("\n")
         action = UPDATE_ACTION
+        group = None
         requires_attributes = True
         attributes = {}
         instructions = Instructions(
-            subject,
             action,
+            group,
+            subject,
             requires_attributes,
             attributes)
         return instructions

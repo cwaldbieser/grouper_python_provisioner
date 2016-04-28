@@ -9,8 +9,9 @@ UPDATE_ACTION = "update"
 Instructions = namedtuple(
     'Instructions',
     [
-        'subject', 
         'action',
+        'group',
+        'subject', 
         'requires_attributes',
         'attributes',
     ])

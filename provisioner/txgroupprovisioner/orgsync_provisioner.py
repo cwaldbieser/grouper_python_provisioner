@@ -1,6 +1,7 @@
 
 from __future__ import print_function
 from collections import namedtuple
+import datetime
 import json
 from textwrap import dedent
 import treq
@@ -55,6 +56,7 @@ class OrgsyncProvisioner(object):
     service_state = None
     reactor = None
     log = None
+    max_per_day = 20
 
     @inlineCallbacks
     def load_config(self, config_file, default_log_level, logObserverFactory):
@@ -79,10 +81,13 @@ class OrgsyncProvisioner(object):
                 self.endpoint_s = config.get("endpoint", None)
                 self.url_prefix = config["url_prefix"]
                 self.api_key = config["api_key"]
+                self.max_per_day = config.get("max_per_day", 20)
             except KeyError as ex:
                 raise OptionMissingError(
                     "A require option was missing: '{0}:{1}'.".format(
                         section, ex.args[0]))
+            # Start the daiy countdown timer.
+            self.reset_daily_countdown()
         except Exception as ex:
             d = self.reactor.callLater(0, self.reactor.stop)
             log.failure("Provisioner failed to initialize: {0}".format(ex))
@@ -116,6 +121,12 @@ class OrgsyncProvisioner(object):
             [PROVISIONER]
             url_prefix = https://api.orgsync.com/api/v2
             """)
+
+    def reset_daily_countdown(self):
+        """
+        Reset the daily countdown and schedule the next one.
+        """
+        pass
 
     def parse_message(self, msg):
         """
