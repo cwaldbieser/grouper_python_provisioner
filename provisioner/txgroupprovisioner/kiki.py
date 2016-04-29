@@ -27,9 +27,11 @@ from errors import (
 )
 from interface import (
     IAttributeResolverFactory,
+    IGroupMapperFactory,
     IMessageParserFactory,
     IProvisionerFactory,
     IProvisioner,
+    IRouterFactory,
 )
 from utils import get_plugin_factory
 
@@ -37,11 +39,6 @@ from utils import get_plugin_factory
 ParserMatcher = namedtuple(
     'ParserMatcher',
     ['exchange_pattern', 'route_key_pattern', 'parser'])
-
-
-RouteData = namedtuple(
-    'RouteData',
-    ['route_key', 'attributes_required'])
 
 
 class KikiProvisionerFactory(object):
@@ -74,7 +71,8 @@ class KikiProvisioner(object):
         try:
             # Load config.
             scp = load_config(config_file, defaults=self.get_config_defaults())
-            config = section2dict(scp, "PROVISIONER")
+            section = "PROVISIONER"
+            config = section2dict(scp, section)
             self.config = config
             # Start logger.
             log_level = config.get('log_level', default_log_level)
@@ -83,33 +81,19 @@ class KikiProvisioner(object):
             log.debug("Initialized logging for Kiki provisioner delivery service.",
                 event_type='init_provisioner_logging')
             # Load and configure the attribute resolver.
-            attrib_resolver_tag = config["attrib_resolver"]
-            factory = get_plugin_factory(attrib_resolver_tag, IAttributeResolverFactory)
-            if factory is None:
-                raise UnknownAttributeResolverError(
-                    "The attribute resolver identified by tag '{0}' is unknown.".format(
-                        attrib_resolver_tag))
-            attrib_resolver = factory.generate_attribute_resolver(scp)
-            attrib_resolver.log = self.log
-            self.attrib_resolver = attrib_resolver
+            attrib_resolver_tag = get_config_opt(config, section, "attrib_resolver")
+            self.install_attribute_resolver(attrib_resolver_tag)
             # Load parse map.
-            parser_map_filename = config["parser_map"]
+            parser_map_filename = get_config_opt(config, section, "parser_map")
             self.load_parser_map(parser_map_filename)
+            # Install group mapper.
+            group_mapper_tag = get_config_opt(config, section, "group_mapper")
+            self.install_group_filter(group_filter_tag)
+            # Install the router
+            router_tag = get_config_opt(config, section, "router")
+            self.install_router(router_tag)
             # Connect to exchange for publishing.
-            section = "AMQP_TARGET"
-            publisher_config = section2dict(scp, section)
-            try:
-                self.pub_exchange = publisher_config["exchange"]
-                self.pub_vhost = publisher_config["vhost"]
-                self.pub_user = publisher_config["user"]
-                self.pub_passwd = publisher_config["passwd"]
-                self.pub_endpoint_s = publisher_config["endpoint"]
-                spec_path = publisher_config["spec"]
-            except KeyError as ex:
-                raise OptionMissingError(
-                    "A require option was missing: '{0}:{1}'.".format(
-                        section, ex.args[0]))
-            self.pub_spec = txamqp.spec.load(spec_path)
+            self.configure_target_exchange(scp)
             yield self.connect_to_exchange() 
         except Exception as ex:
             d = self.reactor.callLater(0, self.reactor.stop)
@@ -125,7 +109,11 @@ class KikiProvisioner(object):
         try:
             msg_parser = self.get_message_parser(amqp_message)
             instructions = msg_parser.parse_message(amqp_message)
-            target_route_key, attributes_required = yield self.get_route_info(instructions)
+            if instructions.group is None:
+                groups = self.map_subject_to_groups(instructions)
+            else:
+                groups = [instructions.group] 
+            target_route_key, attributes_required = yield self.get_route_info(instructions, groups)
             if attributes_required:
                 attribs = yield self.query_subject(instructions)
                 instructions.attributes.update(attribs)
@@ -144,7 +132,8 @@ class KikiProvisioner(object):
             [PROVISIONER]
             parser_map = parser_map.json
             attrib_resolver = rdbms_attrib_resolver
-            group_filter = rdbms_group_filter
+            group_mapper = null_group_mapper
+            router = json_router
             
             [AMQP_TARGET]
             endpoint = tcp:host=127.0.0.1:port=5672
@@ -156,6 +145,59 @@ class KikiProvisioner(object):
             passwd = guest
             spec = {spec_path}
             """).format(spec_path=spec_path)
+
+    def configure_target_exchange(self, scp):
+        """
+        Configure the parameters for connection to the target exchange.
+        """
+        section = "AMQP_TARGET"
+        publisher_config = section2dict(scp, section)
+        self.pub_exchange = get_config_opt(publisher_config, section, "exchange")
+        self.pub_vhost = get_config_opt(publisher_config, section, "vhost")
+        self.pub_user = get_config_opt(publisher_config, section, "user")
+        self.pub_passwd = get_config_opt(publisher_config, section, "passwd")
+        self.pub_endpoint_s = get_config_opt(publisher_config, section, "endpoint")
+        spec_path = get_config_opt(publisher_config, section, "spec")
+        self.pub_spec = txamqp.spec.load(spec_path)
+
+    def install_attribute_resolver(self, tag):
+        """
+        Configure the component that will be used to perform attribute
+        resolution.
+        """
+        factory = get_plugin_factory(tag, IAttributeResolverFactory)
+        if factory is None:
+            raise UnknownAttributeResolverError(
+                "The attribute resolver identified by tag '{0}' is unknown.".format(
+                    tag))
+        attrib_resolver = factory.generate_attribute_resolver(scp)
+        attrib_resolver.log = self.log
+        self.attrib_resolver = attrib_resolver
+
+    def install_router(self, tag):
+        """
+        Configure the component that will be used to route messages to
+        provisioner targets.
+        """
+        factory = get_plugin_factory(tag, IRouterFactory)
+        if factory is None:
+            raise UnknownRouterError(
+                "The router identified by tag '{0}' is unknown.".format(tag))
+        router.log = self.log
+        self.router = router 
+
+    def install_group_mapper(self, tag):
+        """
+        Configure the component that will be used to map a bare subject to
+        groups of interest.
+        """
+        factory = get_plugin_factory(tag, IGroupMapperFactory)
+        if factory is None:
+            raise UnknownRouterError(
+                "The group mapper identified by tag '{0}' is unknown.".format(
+                    tag))
+        router.log = self.log
+        self.group_mapper = group_mapper 
 
     def load_parser_map(self, parser_map_filename):
         """
@@ -250,6 +292,15 @@ class KikiProvisioner(object):
         yield self.pub_channel.channel_open()
 
     @inlineCallbacks
+    def map_subject_to_groups(self, subject):
+        """
+        Return a list of groups for which `subject` is a member.
+        """
+        mapper = self.group_mapper
+        groups = yield self.group_mapper.get_groups_for_subject(subject)
+        returnValue(groups)
+
+    @inlineCallbacks
     def query_subject(self, instructions):
         """
         Return a dictionary of attribute mappings for a subject.
@@ -261,13 +312,14 @@ class KikiProvisioner(object):
         returnValue(attributes)
 
     @inlineCallbacks
-    def get_target_route_key(self, instructions):
+    def get_route_info(self, instructions, groups):
         """
-        Get the target route key based on the instructions parsed from the 
+        Get the target route information  based on the instructions parsed from the 
         original message.
         Returns `RouteData` named tuple.
         """
-        returnValue(RouteData("todo.route_key", False))
+        route_info = yield self.router.get_route(instructions, groups)
+        returnValue(route_info)
 
     @inlineCallbacks
     def send_message(self, route_key, instructions):
@@ -315,9 +367,6 @@ class KikiProvisioner(object):
             event_type="amqp_send_msg",
             msg=serialized)
 
-    def query_groups(self, instructions):
-        """
-        """
             
 def delay(reactor, seconds):
     """
@@ -325,10 +374,21 @@ def delay(reactor, seconds):
     """
     yield task.deferLater(reactor, seconds, provisioner.provision, msg)
 
-
-
-
-
+def get_config_opt(config, section, opt):
+    """
+    Return the config option from the mapping `config` or
+    raise `OptionMissingError`.
+    """
+    try:
+        return config[opt]
+    except KeyError as ex:
+        raise OptionMissingError(
+            "A require option was missing: '{0}:{1}'.".format(
+                section, ex.args[0]))
+    except KeyError as ex:
+        raise OptionMissingError(
+            "A require option was missing: '{0}:{1}'.".format(
+                section, ex.args[0]))
 
 
 

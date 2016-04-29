@@ -66,3 +66,44 @@ class IAttributeResolver(Interface):
         Attributes are a mapping of keys to a list of values.
         """
 
+
+class IGroupMapperFactory(Interface):
+    tag = Attribute('String used to identify the plugin factory.')
+
+    def generate_group_mapper(config_parser):
+        """
+        Create an object that implements IGroupMapper.
+        """
+    
+
+class IGroupMapper(Interface):
+    log = Attribute('A logger.')
+
+    def get_groups_for_subject(subject):
+        """
+        Return a Deferred that fires with a list of groups for
+        which `subject` is a member.
+        """
+
+
+class IRouterFactory(Interface):
+    tag = Attribute('String used to identify the plugin factory.')
+
+    def generate_router(config_parser):
+        """
+        Create an object that implements IRouter.
+        """
+    
+
+class IRouter(Interface):
+    log = Attribute('A logger.')
+
+    def get_route(instructions, groups):
+        """
+        Return a Deferred that fires with a RouteInfo
+        object or raises a NoMatchingRoute exception.
+        If a message should be discarded, the route should
+        map to None.
+        """
+
+

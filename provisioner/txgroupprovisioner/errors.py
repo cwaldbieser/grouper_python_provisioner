@@ -12,6 +12,10 @@ class NoMatchingMessageParserError(Exception):
     pass
 
 
+class NoMatchingRouteError(Exception):
+    pass
+
+
 class UnknownAttributeResolverError(Exception):
     pass
 
