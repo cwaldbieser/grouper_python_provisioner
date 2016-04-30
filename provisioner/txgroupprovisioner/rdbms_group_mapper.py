@@ -54,14 +54,25 @@ class RDBMSGroupMapper(object):
         Return a Deferred that fires with a list of groups for
         which `subject` is a member.
         """
+        log = self.log
+        log.debug(
+            "Looking up groups for subject '{subject}' ...",
+            subject = subject)
         if self.named_param is not None:
             args = {self.named_params: subject}
         else:
             args = [subject]
-        rows = yield self.dbpool.runQuery(self.query, args)
+        log.debug(
+            "Arguments that will be passed to query: {args}",
+            args=args) 
+        query = self.query
+        log.debug("Query: {query}", query=query)
+        rows = yield self.dbpool.runQuery(query, args)
+        log.debug("Number of rows returned: {row_count}", row_count=len(rows))
         groups = []
         for row in rows:
-            value = rows[0]
+            value = row[0]
             groups.append(value) 
+        log.debug("Completed looking up {group_count} groups.", group_count=len(groups))
         returnValue(groups)        
         

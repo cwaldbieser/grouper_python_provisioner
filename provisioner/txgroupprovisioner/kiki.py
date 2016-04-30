@@ -120,7 +120,7 @@ class KikiProvisioner(object):
                     "No assigned group-- "
                     "looking up groups for subject {subject}",
                     subject=subject)
-                groups = yield self.map_subject_to_groups(instructions)
+                groups = yield self.map_subject_to_groups(instructions.subject)
             else:
                 groups = [instructions.group] 
             log.debug("Groups used for routing: {groups}", groups=groups)
