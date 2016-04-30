@@ -70,9 +70,9 @@ class KikiProvisioner(object):
         log = Logger(observer=logObserverFactory("ERROR"))
         try:
             # Load config.
-            scp = load_config(config_file, defaults=self.get_config_defaults())
+            config_parser = load_config(config_file, defaults=self.get_config_defaults())
             section = "PROVISIONER"
-            config = section2dict(scp, section)
+            config = section2dict(config_parser, section)
             self.config = config
             # Start logger.
             log_level = config.get('log_level', default_log_level)
@@ -82,18 +82,18 @@ class KikiProvisioner(object):
                 event_type='init_provisioner_logging')
             # Load and configure the attribute resolver.
             attrib_resolver_tag = get_config_opt(config, section, "attrib_resolver")
-            self.install_attribute_resolver(attrib_resolver_tag)
+            self.install_attribute_resolver(attrib_resolver_tag, config_parser)
             # Load parse map.
             parser_map_filename = get_config_opt(config, section, "parser_map")
             self.load_parser_map(parser_map_filename)
             # Install group mapper.
             group_mapper_tag = get_config_opt(config, section, "group_mapper")
-            self.install_group_filter(group_filter_tag)
+            self.install_group_mapper(group_mapper_tag, config_parser)
             # Install the router
             router_tag = get_config_opt(config, section, "router")
-            self.install_router(router_tag)
+            self.install_router(router_tag, config_parser)
             # Connect to exchange for publishing.
-            self.configure_target_exchange(scp)
+            self.configure_target_exchange(config_parser)
             yield self.connect_to_exchange() 
         except Exception as ex:
             d = self.reactor.callLater(0, self.reactor.stop)
@@ -114,6 +114,9 @@ class KikiProvisioner(object):
             else:
                 groups = [instructions.group] 
             target_route_key, attributes_required = yield self.get_route_info(instructions, groups)
+            if target_route_key is None:
+                log.debug("Discarding message based on route.")
+                returnValue(None)
             if attributes_required:
                 attribs = yield self.query_subject(instructions)
                 instructions.attributes.update(attribs)
@@ -160,7 +163,7 @@ class KikiProvisioner(object):
         spec_path = get_config_opt(publisher_config, section, "spec")
         self.pub_spec = txamqp.spec.load(spec_path)
 
-    def install_attribute_resolver(self, tag):
+    def install_attribute_resolver(self, tag, config_parser):
         """
         Configure the component that will be used to perform attribute
         resolution.
@@ -170,11 +173,11 @@ class KikiProvisioner(object):
             raise UnknownAttributeResolverError(
                 "The attribute resolver identified by tag '{0}' is unknown.".format(
                     tag))
-        attrib_resolver = factory.generate_attribute_resolver(scp)
+        attrib_resolver = factory.generate_attribute_resolver(config_parser)
         attrib_resolver.log = self.log
         self.attrib_resolver = attrib_resolver
 
-    def install_router(self, tag):
+    def install_router(self, tag, config_parser):
         """
         Configure the component that will be used to route messages to
         provisioner targets.
@@ -183,10 +186,11 @@ class KikiProvisioner(object):
         if factory is None:
             raise UnknownRouterError(
                 "The router identified by tag '{0}' is unknown.".format(tag))
+        router = factory.generate_router(config_parser)
         router.log = self.log
         self.router = router 
 
-    def install_group_mapper(self, tag):
+    def install_group_mapper(self, tag, config_parser):
         """
         Configure the component that will be used to map a bare subject to
         groups of interest.
@@ -196,7 +200,8 @@ class KikiProvisioner(object):
             raise UnknownRouterError(
                 "The group mapper identified by tag '{0}' is unknown.".format(
                     tag))
-        router.log = self.log
+        group_mapper = factory.generate_group_mapper(config_parser)
+        group_mapper.log = self.log
         self.group_mapper = group_mapper 
 
     def load_parser_map(self, parser_map_filename):
@@ -337,7 +342,7 @@ class KikiProvisioner(object):
             message["attributes"] = dict(instructions.attributes)
         serialized = json.dumps(message)
         msg = Content(serialized)
-        msg["delivery mode"] = 2
+        msg["delivery-mode"] = 2
         success = False
         reconnect = False
         delay = 20

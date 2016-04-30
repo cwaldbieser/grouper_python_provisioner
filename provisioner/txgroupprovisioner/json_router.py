@@ -1,10 +1,7 @@
 
 from __future__ import print_function
 import json
-from twisted.internet.defer import (
-    inlineCallbacks, 
-    returnValue,
-)
+from twisted.internet import defer
 from twisted.plugin import IPlugin
 from zope.interface import implements
 from interface import (
@@ -33,7 +30,7 @@ class JSONRouterFactory(object):
 
 
 class JSONRouter(object):
-    implements(IGroupMapper)
+    implements(IRouter)
     log = None
 
     def __init__(self, path):
@@ -62,7 +59,7 @@ class JSONRouter(object):
             },
             {
                 "name": "Default",
-                "group_pattern": "*",
+                "group": "*",
                 "discard": true
             }
         ]
@@ -80,7 +77,6 @@ class JSONRouter(object):
             routes.append(RouteEntry(n, entry))
         self.routes = routes
 
-    @inlineCallbacks
     def get_route(self, instructions, groups):
         """
         Return a Deferred that fires with a RouteInfo
@@ -88,68 +84,86 @@ class JSONRouter(object):
         If a message should be discarded, the route should
         map to None.
         """
+        log = self.log
         routes = self.routes
         route_keys = []
         attributes_required = False
         for group in groups:
+            matched = False
             for route in routes:
-                match = route.match(group):
-                if match = RouteEntry.match_result:
-                    route_keys.append(route.route_key)
-                    attributes_required = attributes_required or route.attributes_required
-                    continue
-                elif match == RouteEntry.discard_result:
-                    returnValue(RouteInfo(None, False))
-                else:
-                    raise NoMatchingRouteError(
-                        "There is not route that matches group '{0}'.".format(
-                            group))
+                if route.match(group):
+                    matched = True
+                    if route.discard:
+                        return defer.succeed(RouteInfo(None, False))
+                    else:
+                        route_keys.append(route.route_key)
+                        attributes_required = attributes_required or route.include_attributes
+                        break
+            if not matched:
+                raise NoMatchingRouteError(
+                    "There is not route that matches group '{0}'.".format(
+                        group))
         route_info = RouteInfo(
             '.'.join(route_keys),
             attributes_required)
-        returnValue(route_info)        
+        return defer.succeed(route_info)
 
 
 class RouteEntry(object):
-    match_result = 0
-    discard_result = 1
-
     def __init__(self, n, props):
-        self.index = n
+        self.index = n + 1
         if "group" in props and "stem" in props:
             msg = (
                 "Cannot have both 'group' and 'stem' patterns "
-                "in a route entry number {0}.").format(n)
+                "in a route entry number {0}.").format(n+1)
             raise JSONRouteEntryError(msg)
         if "group" not in props and "stem" not in props:
             msg = (
                 "Must have either 'group' or 'stem' pattern "
-                "in route entry number {0}.").format(n)
+                "in route entry number {0}.").format(n+1)
             raise JSONRouteEntryError(msg)
         self.group = props.get("group", None)
         self.stem = props.get("stem", None)
-        #recursive, include_attributes, route_key, discard
+        if self.stem is not None and not self.stem.endswith(":"):
+            self.stem = "{0}:".format(self.stem)
         if self.stem is None and "recursive" in props:
             msg = (
                 "'recursive' property is only valid for 'stem' pattern"
-                "in route entry number {0}.").format(n)
+                "in route entry number {0}.").format(n+1)
             raise JSONRouteEntryError(msg)
         self.recursive = bool(props.get("recursive", False))
         self.include_attributes = bool(props.get("include_attributes", False))
         self.discard = bool(props.get("discard", False))
         self.route_key = props.get("route_key", None)
-        if self.route_key is None:
+        if self.route_key is None and not self.discard:
             msg = (
                 "Missing 'route_key' "
-                "in route entry number {0}.").format(n)
+                "in route entry number {0}.").format(n+1)
             raise JSONRouteEntryError(msg)
         if self.discard and self.include_attributes:
             msg = (
                 "'include_attributes' and 'discard' are mutally exclusive "
-                "in route entry number {0}.").format(n)
+                "in route entry number {0}.").format(n+1)
+            raise JSONRouteEntryError(msg)
+        if self.discard and self.route_key is not None:
+            msg = (
+                "'route_key' and 'discard' are mutally exclusive "
+                "in route entry number {0}.").format(n+1)
+            raise JSONRouteEntryError(msg)
 
     def match(self, group):
-        pass 
+        """
+        Return True if the group matches the entry; False otherwise.
+        """
+        if self.group == group or self.group == "*":
+            return True
+        elif self.stem is not None and group.startswith(self.stem):
+            if self.recursive:
+                return True
+            suffix = group[len(self.stem):]
+            if ":" not in suffix:
+                return True
+        return False
 
 
 class JSONRouteEntryError(Exception):
