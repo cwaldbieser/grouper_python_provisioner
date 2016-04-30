@@ -1,9 +1,6 @@
 
 from __future__ import print_function
-from twisted.internet.defer import (
-    inlineCallbacks, 
-    returnValue,
-)
+from twisted.internet import defer
 from twisted.plugin import IPlugin
 from zope.interface import implements
 from interface import (
@@ -26,11 +23,10 @@ class NullGroupMapper(object):
     implements(IGroupMapper)
     log = None
 
-    @inlineCallbacks
     def get_groups_for_subject(self, subject):
         """
         Return a Deferred that fires with a list of groups for
         which `subject` is a member.
         """
-        returnValue([])        
+        return defer.succeed([])        
         

@@ -107,19 +107,41 @@ class KikiProvisioner(object):
         """                                              
         log = self.log
         try:
+            log.debug("Begin processing message.")
             msg_parser = self.get_message_parser(amqp_message)
+            log.debug(
+                "Created message parser '{parser_type}'.",
+                parser_type=msg_parser.__class__.__name__)
             instructions = msg_parser.parse_message(amqp_message)
+            log.debug("Parsed instructions from message.")
             if instructions.group is None:
-                groups = self.map_subject_to_groups(instructions)
+                log.debug(
+                    "No assigned group-- "
+                    "looking up groups for subject {subject}",
+                    subject=instructions.subject)
+                groups = yield self.map_subject_to_groups(instructions)
             else:
                 groups = [instructions.group] 
+            log.debug("Groups used for routing: {groups}", groups=groups)
             target_route_key, attributes_required = yield self.get_route_info(instructions, groups)
+            log.debug(
+                "Routing results: route_key={route_key}, "
+                "attributes_required={attributes_required}",
+                route_key=target_route_key,
+                attributes_required=attributes_required)
             if target_route_key is None:
                 log.debug("Discarding message based on route.")
                 returnValue(None)
             if attributes_required:
+                log.debug(
+                    "Looking up attributes for subject {subject}.",
+                    subject=instructions.subject)
                 attribs = yield self.query_subject(instructions)
                 instructions.attributes.update(attribs)
+                log.debug(
+                    "Final attributes: {attributes}",
+                    attributes=instructions.attributes)
+            log.debug("Delivering message to exchange ...")
             yield self.send_message(target_route_key, instructions)
         except Exception as ex:
             log.warn("Error provisioning target: {error}", error=ex)
