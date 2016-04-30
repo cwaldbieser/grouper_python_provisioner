@@ -113,16 +113,23 @@ class KikiProvisioner(object):
                 "Created message parser '{parser_type}'.",
                 parser_type=msg_parser.__class__.__name__)
             instructions = msg_parser.parse_message(amqp_message)
+            subject = instructions.subject
             log.debug("Parsed instructions from message.")
             if instructions.group is None:
                 log.debug(
                     "No assigned group-- "
                     "looking up groups for subject {subject}",
-                    subject=instructions.subject)
+                    subject=subject)
                 groups = yield self.map_subject_to_groups(instructions)
             else:
                 groups = [instructions.group] 
             log.debug("Groups used for routing: {groups}", groups=groups)
+            if len(groups) == 0:
+                log.debug(
+                    "Subject '{subject}' does not belong "
+                    "to any groups of interest.",
+                    subject=subject)
+                returnValue(None)
             target_route_key, attributes_required = yield self.get_route_info(instructions, groups)
             log.debug(
                 "Routing results: route_key={route_key}, "
@@ -135,7 +142,7 @@ class KikiProvisioner(object):
             if attributes_required:
                 log.debug(
                     "Looking up attributes for subject {subject}.",
-                    subject=instructions.subject)
+                    subject=subject)
                 attribs = yield self.query_subject(instructions)
                 instructions.attributes.update(attribs)
                 log.debug(
