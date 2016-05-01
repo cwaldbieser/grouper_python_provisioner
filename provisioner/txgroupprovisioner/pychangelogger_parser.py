@@ -34,18 +34,15 @@ class PyChangeloggerMessageParser(object):
         subject = parts[1]
         action = parts[2]
         if action.startswith("delete"):
-            requires_attributes = False
             attributes = None
             action = DELETE_ACTION
         else:
-            requires_attributes = True
             attributes = {}
             action = ADD_ACTION
         instructions = Instructions(
             action,
             group,
             subject,
-            requires_attributes,
             attributes)
         return instructions
 

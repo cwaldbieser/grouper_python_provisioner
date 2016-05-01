@@ -5,6 +5,7 @@ import json
 import os
 import re
 from textwrap import dedent
+import commentjson
 from twisted.internet import task
 from twisted.internet.defer import (
     inlineCallbacks, 
@@ -149,7 +150,8 @@ class KikiProvisioner(object):
                     "Final attributes: {attributes}",
                     attributes=instructions.attributes)
             log.debug("Delivering message to exchange ...")
-            yield self.send_message(target_route_key, instructions)
+            yield self.send_message(
+                target_route_key, instructions, attributes_required)
         except Exception as ex:
             log.warn("Error provisioning target: {error}", error=ex)
             raise
@@ -240,7 +242,7 @@ class KikiProvisioner(object):
         log = self.log
         self.parser_mappings = []
         with open(parser_map_filename) as f:
-            doc = json.load(f)
+            doc = commentjson.load(f)
         for entry_index, entry in enumerate(doc):
             valid = True
             for required in ('exchange', 'route_key', 'parser'):
@@ -356,7 +358,7 @@ class KikiProvisioner(object):
         returnValue(route_info)
 
     @inlineCallbacks
-    def send_message(self, route_key, instructions):
+    def send_message(self, route_key, instructions, attributes_required):
         """
         Compose a provisioning message and deliver it to an exchange with
         routing key `route_key`.
@@ -367,8 +369,10 @@ class KikiProvisioner(object):
             "action": instructions.action,
             "subject": instructions.subject
         }
-        if instructions.requires_attributes:
+        if attributes_required:
             message["attributes"] = dict(instructions.attributes)
+        if instructions.group is not None:
+            message["group"] = instructions.group
         serialized = json.dumps(message)
         msg = Content(serialized)
         msg["delivery-mode"] = 2

@@ -25,6 +25,10 @@ from twisted.internet import task, threads
 from twisted.internet.task import LoopingCall
 from twisted.logger import Logger
 from txgroupprovisioner.interface import IProvisionerFactory, IProvisioner
+from txgroupprovisioner.kikimessage import (
+    ADD_ACTION,
+    DELETE_ACTION,
+)
 
 LDAPGroupTarget = namedtuple("LDAPTargetGroup", ['group', 'create_group', 'create_context'])
 
@@ -222,16 +226,17 @@ class LDAPProvisioner(object):
         Provision an entry based on an AMQP message.
         """
         log = self.log
-        message = msg.content.body
-        parts = message.split("\n")
-        if len(parts) != 3:
+        serialized = msg.content.body
+        doc = json.loads(serialized)
+        try:
+            group = doc["group"]
+            subject = doc["subject"]
+            action = doc["action"]
+        except KeyError as ex:
             log.warn("Invalid message received.  Discarding.  Message was {msg}.", 
                 event_type="invalid_message_error",
-                msg=message)
+                msg=serialized)
             returnValue(None)
-        group = parts[0]
-        subject = parts[1]
-        action = parts[2]
         db_str = self.config['sqlite_db']
         try:
             d = yield self.add_action_to_intake(group, action, subject)
@@ -345,8 +350,8 @@ class LDAPProvisioner(object):
                     event_type='ldap_bind',
                     bind_dn=bind_dn)
             group_sql = "SELECT rowid, grp FROM groups ORDER BY grp ASC;"
-            memb_add_sql = "SELECT member FROM member_ops WHERE grp = ? AND op = 'addMembership' ORDER BY member ASC;" 
-            memb_del_sql = "SELECT member FROM member_ops WHERE grp = ? AND op = 'deleteMembership' ORDER BY member ASC;" 
+            memb_add_sql = "SELECT member FROM member_ops WHERE grp = ? AND op = ? ORDER BY member ASC;" 
+            memb_del_sql = "SELECT member FROM member_ops WHERE grp = ? AND op = ? ORDER BY member ASC;" 
             subj_sql = "SELECT DISTINCT member FROM member_ops ORDER BY member ASC;"
             subj_add_sql = dedent("""\
                 SELECT DISTINCT groups.grp 
@@ -354,7 +359,7 @@ class LDAPProvisioner(object):
                     INNER JOIN member_ops
                         ON groups.rowid = member_ops.grp
                 WHERE member = ?
-                AND op = 'addMembership'
+                AND op = ? 
                 ORDER BY groups.grp ASC
                 ;
                 """)
@@ -364,7 +369,7 @@ class LDAPProvisioner(object):
                     INNER JOIN member_ops
                         ON groups.rowid = member_ops.grp
                 WHERE member = ?
-                AND op = 'deleteMembership'
+                AND op = ?
                 ORDER BY groups.grp ASC
                 ;
                 """)
@@ -382,10 +387,10 @@ class LDAPProvisioner(object):
                     yield self.runDBCommand(
                         '''DELETE FROM groups WHERE grp = ?;''', [group], is_query=False)
                     continue
-                memb_add_results = yield self.runDBCommand(memb_add_sql, [groupid])
+                memb_add_results = yield self.runDBCommand(memb_add_sql, [groupid, ADD_ACTION])
                 add_membs = set([r[0] for r in memb_add_results])
                 del memb_add_results
-                memb_del_results = yield self.runDBCommand(memb_del_sql, [groupid])
+                memb_del_results = yield self.runDBCommand(memb_del_sql, [groupid, DELETE_ACTION])
                 del_membs = set([r[0] for r in memb_del_results])
                 del memb_del_results
                 if len(add_membs) > 0 or len(del_membs) > 0:
@@ -402,11 +407,11 @@ class LDAPProvisioner(object):
                     mapped_groups[target.group] = group_dn
             results = yield self.runDBCommand(subj_sql)
             for (subject_id,) in results: 
-                add_results = yield self.runDBCommand(subj_add_sql, [subject_id])
+                add_results = yield self.runDBCommand(subj_add_sql, [subject_id, ADD_ACTION])
                 add_membs = [self.group_to_ldap_group(r[0]) for r in add_results]
                 del add_results
                 add_membs = set(mapped_groups[t.group] for t in add_membs if t is not None)
-                del_results = yield self.runDBCommand(subj_del_sql, [subject_id])
+                del_results = yield self.runDBCommand(subj_del_sql, [subject_id, DELETE_ACTION])
                 del_membs = [self.group_to_ldap_group(r[0]) for r in del_results]
                 del del_results
                 del_membs = set(mapped_groups[t.group] for t in del_membs if t is not None)

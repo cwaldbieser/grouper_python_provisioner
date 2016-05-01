@@ -12,7 +12,6 @@ Instructions = namedtuple(
         'action',
         'group',
         'subject', 
-        'requires_attributes',
         'attributes',
     ])
 

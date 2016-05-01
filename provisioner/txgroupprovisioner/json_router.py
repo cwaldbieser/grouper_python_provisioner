@@ -1,6 +1,6 @@
 
 from __future__ import print_function
-import json
+from commentjson import load as load_json
 from twisted.internet import defer
 from twisted.plugin import IPlugin
 from zope.interface import implements
@@ -65,7 +65,7 @@ class JSONRouter(object):
         ]
         """
         with open(path, "r") as f:
-            doc = json.load(f)
+            doc = load_json(f)
         self.create_route_map(doc)
 
     def create_route_map(self, doc):
@@ -94,7 +94,10 @@ class JSONRouter(object):
                 if route.match(group):
                     matched = True
                     if route.discard:
-                        return defer.succeed(RouteInfo(None, False))
+                        log.debug(
+                            "Discarding group '{group}' from routing consideration.",
+                            group=group)
+                        break
                     else:
                         route_keys.append(route.route_key)
                         attributes_required = attributes_required or route.include_attributes
@@ -103,9 +106,12 @@ class JSONRouter(object):
                 raise NoMatchingRouteError(
                     "There is not route that matches group '{0}'.".format(
                         group))
-        route_info = RouteInfo(
-            '.'.join(route_keys),
-            attributes_required)
+        if len(route_keys) == 0:
+            route_info = RouteInfo(None, False)
+        else:
+            route_info = RouteInfo(
+                '.'.join(route_keys),
+                attributes_required)
         return defer.succeed(route_info)
 
 
