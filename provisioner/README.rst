@@ -221,7 +221,7 @@ follows::
                 "name": "Description for the second route.",
                 "group": "full:path:to:a:group",
                 "include_attributes": false,
-                "route_key": "route_key_b"
+                "route_key": "route_key_B"
             },
             {
                 "name": "Description for the third route.",
@@ -236,6 +236,31 @@ follows::
             }
         ]
 
+Each entry is a route that is tested against the group included in a parsed
+message or the groups mapped to a subject for messages that have no group.
+In the latter case, each group may match a separate route.  In this case, the
+route key for the exchange will have multiple fields, one for each route
+matched.  The final route key is used when delivering the message to a topic
+exchange.
+
+A `stem` match will match all child groups of a stem.  If the `recursive` key
+is set to true, all descendants of the stem will match.
+
+In contrast, a `group` match will match only an exact group.  The exception to
+this rule is that if the value is '*', then any group will match.  This is
+useful for creating default routes.
+
+If a route entry may include the `include attributes` key.  If set to true, the
+provisioner delivery service will attempt to look up attributes for the 
+subject and include them in the message it delivers.
+
+All route entries must include either a `route_key` or a `discard` key with a
+value of true.  If `discard` is set, the group being examined will be dropped
+from consideration when forming the final routing key.  Any routing keys
+matched will be used as fields of the final routing key.
+
+For example, if 3 groups match 3 routes with route keys 'frobnitz', 'xyzzy',
+and 'wumpus', the final routing key will be 'frobnitz.xyzzy.wumpus'.
 
 """""""""""""""""""
 Attribute Resolvers

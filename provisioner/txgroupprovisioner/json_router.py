@@ -109,6 +109,15 @@ class JSONRouter(object):
         if len(route_keys) == 0:
             route_info = RouteInfo(None, False)
         else:
+            # Remove duplicate route keys.
+            routekey_set = set([])
+            temp = []
+            for k in route_keys:
+                if not k in routekey_set:
+                    temp.append(k)
+                    routekey_set.add(k)
+            route_keys = temp
+            del temp
             route_info = RouteInfo(
                 '.'.join(route_keys),
                 attributes_required)
