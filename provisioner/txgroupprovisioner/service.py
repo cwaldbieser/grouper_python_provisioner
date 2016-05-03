@@ -36,6 +36,8 @@ class GroupProvisionerService(Service):
     log = None
     maxSafeTimeNoUpdate = 60
     consumerTag = "mytag"
+    max_amqp_delay = 30
+    amqp_delay_increment = 5
 
     def __init__(
             self, 
@@ -264,12 +266,14 @@ class GroupProvisionerService(Service):
                 yield task.deferLater(reactor, delay, provisioner.provision, msg)
             except Exception as ex:
                 log.error("Could not record message from queue.  Error was: {error}", error=ex)
-                delay = min(600, max(delay+20, delay*2))
+                delay = min(self.max_amqp_delay, max(delay + self.amqp_delay_increment, delay*2))
             else:
                 recorded = True
                 delay = 0    
                 yield channel.basic_ack(delivery_tag=msg.delivery_tag)
                 log.debug("Message from queue recorded.")
+        if not recorded:
+           yield channel.basic_reject(delivery_tag=msg.delivery_tag, requeue=True) 
         
     @inlineCallbacks
     def closeAMQPConnection(self):
