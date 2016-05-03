@@ -47,7 +47,6 @@ The main configuration has the following sections and options:
 * *APPLICATION*
     * `changefile`: Path to the file that contains the last processed sequence 
       number form the changelog.
-    * `routemap`: Path to a route map file (see below).
 * *AMQP*
     * `host`: Host where the exchange resides.
     * `port`: Port on which the exchange is listening.
@@ -57,37 +56,13 @@ The main configuration has the following sections and options:
     * `exchange`: The name of the exchange.
     * `keystore`: (Optional) path to the trust store containing trusted CA certificates.
     * `keystore_passphrase`: (Optional) passphrase used to access the trust store.
-
-'''''''''''''
-The Route Map
-'''''''''''''
-
-The `routemap` option of the main configuration points to a file that describes 
-mappings from stems (folders) or groups to routing keys.  The changelog consumer 
-connects to the exchange to deliver a message containing a group membership 
-change.  A route key is provided with the message which will be used by the 
-exchange to determine to which queue(s) the message should be delivered (if any).
-
-Each line of the route map file contains a path (a stem or group) followed by 
-"=" and a route key.  Groups are represented by thier fully qualified Grouper 
-paths.  A stem is represented by the Grouper path to the stem, followed by   
-a colon and an asterisk.  This indicates that any path that falls under this
-stem will be mapped to the indicated route key unless another more specific 
-path overrides it.
-
-There is also a special path, `_default` that will be used to assign a route
-key if no path in the file matches the group path.
-
-Typical usage would be to create a stem in Grouper under which groups that are 
-to be exported to a particular provisioning agent reside.  A stem entry in the 
-route map will assign a unique route key to these groups.  The exchange will
-presumably be configured to map the route keys to the appropriate provisioning
-agent(s).
+    * `route_key`: (Optional) the routing key to use when delivering AMQP
+      messages to the exchange (default 'kiki.grouper').
 
 -----------------------------------
 Connecting to the exchange with TLS
 -----------------------------------
-In order to ensure identity, integrity, and confidentiality of the data
+In order to ensure authenticity, integrity, and confidentiality of the data
 being placed in the exchange, the changelog consumer can connect to the
 exchange using TLS.  To do this, a Trust Store (a Java keystore that holds
 CA certs you trust) must used.

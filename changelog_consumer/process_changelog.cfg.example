@@ -1,7 +1,6 @@
 
 [APPLICATION]
 changefile = last_change_id.txt
-routemap = routemap.cfg
 
 [AMQP]
 host = localhost
@@ -18,4 +17,4 @@ vhost = /
 user = guest
 password = guest
 exchange = grouper_exchange
-
+route_key = kiki.grouper

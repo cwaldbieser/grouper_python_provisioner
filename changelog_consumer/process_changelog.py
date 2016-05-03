@@ -1,5 +1,4 @@
 
-
 # Standard library
 import argparse
 from ConfigParser import SafeConfigParser
@@ -36,7 +35,6 @@ from java.lang import String
 from java.lang import Boolean
 from java.security import KeyStore
 from javax.net.ssl import SSLContext, TrustManagerFactory
-from sortedcollection import SortedCollection
 
 # AMQP functions
 def get_amqp_conn(host, port, vhost, user, passwd, ssl_ctx=None):
@@ -64,63 +62,12 @@ def send_message(channel, exchange, route_key, msg):
     channel.basicPublish(exchange, routing_key, props, message.getBytes())
     channel.waitForConfirmsOrDie()
 
-def send_group_mod(channel, exchange, router, group, action_name, subject_id):
+def send_group_mod(channel, exchange, route_key, group, action_name, subject_id):
     route_key = router.get_key(group, subject_id, action_name)
     debug("route_key='%s' group='%s' subject='%s' action='%s'" % (
         route_key, group, subject_id, action_name))
     msg = "%s\n%s\n%s" % (group, subject_id, action_name)
     send_message(channel, exchange, route_key, msg)
-
-def load_route_map(fname):
-    routes = {}
-    f = open(fname, "r")
-    for n, line in enumerate(f):
-        line = line.strip()
-        if line.startswith("#"):
-            continue
-        if line == "":
-            continue
-        if not '=' in line:
-            warn("Invalid route on line %s." % (n+1))
-            warn("route => '%s'" % line)
-            continue
-        parts = line.split("=", 1)
-        key = parts[0].strip()
-        value = parts[1].strip()
-        routes[key] = value
-    return routes
-
-
-class Router(object):
-    def __init__(self, route_map):
-        self.direct_mappings = {}
-        self.patterns = SortedCollection(key=itemgetter(0))
-        self.default_key = ''
-        for k, v in route_map.iteritems():
-            if k == '_default':
-                self.default_key = v
-            elif k.endswith('*'):
-                self.patterns.insert((k[:-1], Template(v)))
-            else:
-                self.direct_mappings[k] = v
-    
-    def get_key(self, group, subject_id, action_name):
-        route_key = self.direct_mappings.get(group, None)
-        if route_key is not None:
-            return route_key
-        try:
-            result = self.patterns.find_le(group)
-        except ValueError:
-            return self.default_key
-        pattern, route_key = result
-        if not group.startswith(pattern):
-            return self.default_key
-        parts = group.split(':')
-        grp = parts[-1]
-        stem = ':'.join(parts[:-1])
-        rk = route_key.substitute(stem=stem, group=grp, subject=subject_id, action=action_name)
-        return rk
-            
 
 # Logging functions
 def info(msg):
@@ -155,7 +102,6 @@ def load_config(config_name):
     defaults = dedent("""\
         [APPLICATION]
         changefile = %s
-        routemap = %s
 
         [AMQP]
         host = locahost
@@ -164,6 +110,7 @@ def load_config(config_name):
         user = guest
         password = guest
         exchage = grouper_exchange
+        route_key = kiki.grouper
         """) % (
             os.path.join(os.curdir, "last_change_id.txt"),
             os.path.join(os.curdir, "routes.cfg"))
@@ -227,23 +174,20 @@ def main(args):
     changefile = args.change_file
     if changefile is None:
         changefile = scp.get("APPLICATION", "changefile")
-    routefile = args.route_file
-    if routefile is None:
-        routefile = scp.get("APPLICATION", "routemap")
+    route_key = args.route_key
+    if route_key is None:
+        route_key = scp.get("AMQP", "route_key")
     debug("AMQP host => '%s'" % host)
     debug("AMQP port => '%s'" % port)
     debug("AMQP vhost => '%s'" % vhost)
     debug("AMQP user => '%s'" % user)
     debug("AMQP exchange => '%s'" % exchange)
     debug("AMQP changefile => '%s'" % changefile)
-    debug("AMQP routemap => '%s'" % routefile)
+    debug("AMQP route_key => '%s'" % route_key)
     if (keystore is not None) and (keystore_passphrase is not None):
         debug("AMQP keystore => '%s'" % keystore)
     else:
         debug("AMQP not configured for TLS (missing keystore or passphrase).")
-    # Read routes.
-    routes = load_route_map(routefile)
-    router = Router(routes)
     # Connect to message queue.
     if keystore is not None and keystore_passphrase is not None:
         ssl_ctx = getSSLContext(keystore, keystore_passphrase, tls_version)
@@ -273,7 +217,7 @@ def main(args):
     hib3.setJobName(job_name)
     hib3.setStatus(GrouperLoaderStatus.RUNNING.name())
     # Begin the main loop.
-    attempt_num_entries = 100
+    attempt_num_entries = 500
     while True:
         GrouperLoader.runOnceByJobName(session, GrouperLoaderType.GROUPER_CHANGE_LOG_TEMP_TO_CHANGE_LOG)
         last_sequence = c.getLastSequenceProcessed()
@@ -364,9 +308,9 @@ if __name__ == "__main__":
         action="store",
         help="A file used to record the last change processed.")
     parser.add_argument(
-        "--route-file",
+        "--route-key",
         action="store",
-        help="A file containing the routing patterns.")
+        help="A routing key used when sending messages to an AMQP topic exchange.")
     args = parser.parse_args()
     main(args)
 
