@@ -12,9 +12,14 @@ from twisted.internet.defer import (
 )
 from twisted.internet.endpoints import clientFromString, connectProtocol
 from twisted.internet.task import LoopingCall
+from twisted.web.client import(
+    Agent,
+    HTTPConnectionPool,
+)
+from twisted.web.iweb import IAgentEndpointFactory
 from twisted.logger import Logger
 from twisted.plugin import IPlugin
-from zope.interface import implements
+from zope.interface import implements, implementer
 from config import load_config, section2dict
 from errors import (
     OptionMissingError,
@@ -38,6 +43,19 @@ ParsedMessage = namedtuple(
 
 class UnknowActionError(Exception):
     pass
+
+
+@implementer(IAgentEndpointFactory)
+class WebClientEndpointFactory(object):
+    """
+    An Agent endpoint factory based on endpoint strings.
+    """
+    def __init__(self, reactor, endpoint_s):
+        self.reactor = reactor
+        self.endpoint_s = endpoint_s
+
+    def endpointForURI(self, uri):
+        return clientFromString(self.reactor, self.endpoint_s)
 
 
 class OrgsyncProvisionerFactory(object):
@@ -90,6 +108,8 @@ class OrgsyncProvisioner(object):
             # Start the daiy countdown timer.
             self.daily_reset = LoopingCall(self.reset_daily_countdown)
             d = self.daily_reset.start(60*60*24, now=True)
+            # Create the web client.
+            self.make_web_client()
         except Exception as ex:
             d = self.reactor.callLater(0, self.reactor.stop)
             log.failure("Provisioner failed to initialize: {0}".format(ex))
@@ -163,6 +183,30 @@ class OrgsyncProvisioner(object):
         log.debug(
             "Attempting to provision subject '{subject}'.",
             subject=msg.subject)
+        http_client = self.http_client
+        url = "{prefix}/accounts/username/{username}@lafayette.edu".format(
+            prefix=self.url_prefix,
+            username=msg.subject)
+        params = {'key': self.api_key}
+        headers = {'Accept': ['application/json']}
+        log.debug("url: {url}", url=url)
+        log.debug("headers: {headers}", headers=headers)
+        log.debug("params: {params}", params=params)
+        try:
+            resp = yield http_client.get(url, headers=headers, params=params)
+        except Exception as ex:
+            log.error("Error attempting to retrieve existing account.")
+            raise
+        log.debug("Response code: {code}", code=resp.code)
+        try:
+            doc = yield resp.json()
+            #doc = yield resp.text()
+        except Exception as ex:
+            log.error("Error attempting to parse response.")
+            raise
+        log.debug(
+            "Received response: {response}",
+            response=doc)
         returnValue(None)
 
     @inlineCallbacks
@@ -179,4 +223,18 @@ class OrgsyncProvisioner(object):
             "Attempting to deprovision subject '{subject}'.",
             subject=msg.subject)
         returnValue(None)
+
+    def make_web_agent(self):
+        """
+        Configure a `Twisted.web.client.Agent` to be used to make REST calls.
+        """
+        self.pool = HTTPConnectionPool(self.reactor)
+        self.agent = Agent.usingEndpointFactory(
+            self.reactor,
+            WebClientEndpointFactory(self.reactor, self.endpoint_s),
+            pool=self.pool)
+
+    def make_web_client(self):
+        self.make_web_agent()
+        self.http_client = treq.client.HTTPClient(self.agent)
 
