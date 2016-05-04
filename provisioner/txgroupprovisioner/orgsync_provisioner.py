@@ -3,6 +3,7 @@ from __future__ import print_function
 from collections import namedtuple
 import datetime
 import json
+import jinja2 
 from textwrap import dedent
 import treq
 from twisted.internet import defer
@@ -101,6 +102,7 @@ class OrgsyncProvisioner(object):
                 self.url_prefix = config["url_prefix"]
                 self.api_key = config["api_key"]
                 self.max_per_day = config.get("max_per_day", 20)
+                self.account_query = jinja2.Template(config['account_query'])
             except KeyError as ex:
                 raise OptionMissingError(
                     "A require option was missing: '{0}:{1}'.".format(
@@ -184,9 +186,12 @@ class OrgsyncProvisioner(object):
             "Attempting to provision subject '{subject}'.",
             subject=msg.subject)
         http_client = self.http_client
-        url = "{prefix}/accounts/username/{username}@lafayette.edu".format(
-            prefix=self.url_prefix,
-            username=msg.subject)
+        prefix = self.url_prefix
+        url = "{0}{1}".format(
+            prefix,
+            self.account_query.render(
+                subject=msg.subject,
+                attributes=msg.attributes))
         params = {'key': self.api_key}
         headers = {'Accept': ['application/json']}
         log.debug("url: {url}", url=url)
