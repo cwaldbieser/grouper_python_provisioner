@@ -68,15 +68,22 @@ def send_group_mod(channel, exchange, route_key, group, action_name, subject_id)
     msg = "%s\n%s\n%s" % (group, subject_id, action_name)
     send_message(channel, exchange, route_key, msg)
 
+def tstamp_s():
+    """
+    Get a string timestamp.
+    """
+    tstamp = datetime.datetime.today()
+    return tstamp.strftime("%Y-%m-%dT%H:%M:%S")
+
 # Logging functions
 def info(msg):
-    sys.stderr.write("[INFO] %s\n" % msg)
+    sys.stderr.write("[{0}][INFO] {1}\n".format(tstamp_s(), msg))
 
 def debug(msg):
-    sys.stderr.write("[DEBUG] %s\n" % msg)
+    sys.stderr.write("[{0}][DEBUG] {1}\n".format(tstamp_s(), msg))
 
 def warn(msg):
-    sys.stderr.write("[WARNING] %s\n" % msg)
+    sys.stderr.write("[{0}][WARNING] {1}\n".format(tstamp_s(), msg))
 
 # Changelogger functions
 def get_last_sequence(changefile):
