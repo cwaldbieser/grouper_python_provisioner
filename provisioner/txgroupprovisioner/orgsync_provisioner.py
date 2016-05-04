@@ -5,11 +5,13 @@ import datetime
 import json
 from textwrap import dedent
 import treq
+from twisted.internet import defer
 from twisted.internet.defer import (
     inlineCallbacks, 
     returnValue,
 )
 from twisted.internet.endpoints import clientFromString, connectProtocol
+from twisted.internet.task import LoopingCall
 from twisted.logger import Logger
 from twisted.plugin import IPlugin
 from zope.interface import implements
@@ -58,7 +60,6 @@ class OrgsyncProvisioner(object):
     log = None
     max_per_day = 20
 
-    @inlineCallbacks
     def load_config(self, config_file, default_log_level, logObserverFactory):
         """                                                             
         Load the configuration for this provisioner and initialize it.  
@@ -87,11 +88,13 @@ class OrgsyncProvisioner(object):
                     "A require option was missing: '{0}:{1}'.".format(
                         section, ex.args[0]))
             # Start the daiy countdown timer.
-            self.reset_daily_countdown()
+            self.daily_reset = LoopingCall(self.reset_daily_countdown)
+            d = self.daily_reset.start(60*60*24, now=True)
         except Exception as ex:
             d = self.reactor.callLater(0, self.reactor.stop)
             log.failure("Provisioner failed to initialize: {0}".format(ex))
             raise
+        return defer.succeed(None)
                      
     @inlineCallbacks                                                   
     def provision(self, amqp_message):             
@@ -99,6 +102,10 @@ class OrgsyncProvisioner(object):
         Provision an entry based on an AMQP message.  
         """                                              
         log = self.log
+        if self.daily_count >= self.max_per_day:
+            log.warn("Maximum provisioning threshold has already been reached.")
+            returnValue(defer.fail(Exception(
+                "Maximum provisioning threshold has already been reached.")))
         try:
             msg = self.parse_message(amqp_message)
         except Exception as ex:
@@ -107,8 +114,10 @@ class OrgsyncProvisioner(object):
         try:
             if msg.action in (ADD_ACTION, UPDATE_ACTION):
                 yield self.provision_subject(msg)
+                self.daily_count = self.daily_count + 1
             elif msg.action == DELETE_ACTION:
                 yield self.deprovision_subject(msg)
+                self.daily_count = self.daily_count + 1
             else:
                 raise UnknownActionError(
                     "Don't know how to handle action '{0}'.".format(msg.action))
@@ -126,13 +135,14 @@ class OrgsyncProvisioner(object):
         """
         Reset the daily countdown and schedule the next one.
         """
-        pass
+        self.daily_count = 0
 
     def parse_message(self, msg):
         """
         Parse message into a standard form.
         """
-        doc = json.parse(msg)
+        serialized = msg.content.body
+        doc = json.loads(serialized)
         action = doc['action']
         subject = doc['subject']
         attributes = None
@@ -145,9 +155,15 @@ class OrgsyncProvisioner(object):
         """
         Provision a subject to Orgsync.
         """
+        log = self.log
         # Check if subject exists.
         # Add or update subject record via API.
-        pass
+        if False:
+            yield None
+        log.debug(
+            "Attempting to provision subject '{subject}'.",
+            subject=msg.subject)
+        returnValue(None)
 
     @inlineCallbacks
     def deprovision_subject(self, msg):
@@ -156,5 +172,11 @@ class OrgsyncProvisioner(object):
         """
         # Look up subject's Orgsync ID.
         # Remove subject from Orgsync.
-        pass
+        log = self.log
+        if False:
+            yield None
+        log.debug(
+            "Attempting to deprovision subject '{subject}'.",
+            subject=msg.subject)
+        returnValue(None)
 

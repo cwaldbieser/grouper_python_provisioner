@@ -5,3 +5,6 @@ ldap_provisioner_factory = LDAPProvisionerFactory()
 from txgroupprovisioner.kiki import KikiProvisionerFactory
 kiki_provisioner_factory = KikiProvisionerFactory()
 
+from txgroupprovisioner.orgsync_provisioner import OrgsyncProvisionerFactory
+orgsync_provisioner_factory = OrgsyncProvisionerFactory()
+
