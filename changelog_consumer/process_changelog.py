@@ -63,7 +63,6 @@ def send_message(channel, exchange, route_key, msg):
     channel.waitForConfirmsOrDie()
 
 def send_group_mod(channel, exchange, route_key, group, action_name, subject_id):
-    route_key = router.get_key(group, subject_id, action_name)
     debug("route_key='%s' group='%s' subject='%s' action='%s'" % (
         route_key, group, subject_id, action_name))
     msg = "%s\n%s\n%s" % (group, subject_id, action_name)
@@ -111,9 +110,7 @@ def load_config(config_name):
         password = guest
         exchage = grouper_exchange
         route_key = kiki.grouper
-        """) % (
-            os.path.join(os.curdir, "last_change_id.txt"),
-            os.path.join(os.curdir, "routes.cfg"))
+        """) % os.path.join(os.curdir, "last_change_id.txt")
     scp = SafeConfigParser()
     buf = StringIO.StringIO(defaults)
     scp.readfp(buf)
@@ -238,7 +235,7 @@ def main(args):
                 debug("Attempting to send message: exchange='%s', group='%s', action='%s', subject='%s'" % (
                     exchange, group, action_name, subject_id))
                 try:
-                    send_group_mod(channel, exchange, router, group, action_name, subject_id)
+                    send_group_mod(channel, exchange, route_key, group, action_name, subject_id)
                 except (Exception, ), ex:
                     warn("Could not send message.\n%s\n" % str(ex))
                     time.sleep(10)
