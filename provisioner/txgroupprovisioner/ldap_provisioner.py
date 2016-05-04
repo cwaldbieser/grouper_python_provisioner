@@ -4,7 +4,7 @@ from collections import Mapping, namedtuple
 import contextlib
 import datetime
 import exceptions
-from json import load
+from json import load, loads
 import os
 import os.path
 from textwrap import dedent
@@ -227,7 +227,7 @@ class LDAPProvisioner(object):
         """
         log = self.log
         serialized = msg.content.body
-        doc = json.loads(serialized)
+        doc = loads(serialized)
         try:
             group = doc["group"]
             subject = doc["subject"]
