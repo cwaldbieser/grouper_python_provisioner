@@ -3,6 +3,7 @@ from __future__ import print_function
 from collections import namedtuple
 import datetime
 import json
+import commentjson
 import jinja2 
 from textwrap import dedent
 import treq
@@ -103,6 +104,8 @@ class OrgsyncProvisioner(object):
                 self.api_key = config["api_key"]
                 self.max_per_day = config.get("max_per_day", 20)
                 self.account_query = jinja2.Template(config['account_query'])
+                self.account_update = jinja2.Template(config['account_update'])
+                attrib_map_path = config["attribute_map"]
             except KeyError as ex:
                 raise OptionMissingError(
                     "A require option was missing: '{0}:{1}'.".format(
@@ -112,11 +115,20 @@ class OrgsyncProvisioner(object):
             d = self.daily_reset.start(60*60*24, now=True)
             # Create the web client.
             self.make_web_client()
+            # Create the attribute map.
+            self.make_attribute_map(attrib_map_path)
         except Exception as ex:
             d = self.reactor.callLater(0, self.reactor.stop)
             log.failure("Provisioner failed to initialize: {0}".format(ex))
             raise
         return defer.succeed(None)
+
+    def make_attribute_map(self, path):
+        with open(path, "r") as f:
+            doc = commentjson.load(f)
+        self.attribute_map = {}
+        for k, v in doc.items():
+            self.attribute_map[k.lower()] = v
                      
     @inlineCallbacks                                                   
     def provision(self, amqp_message):             
@@ -202,17 +214,68 @@ class OrgsyncProvisioner(object):
         except Exception as ex:
             log.error("Error attempting to retrieve existing account.")
             raise
-        log.debug("Response code: {code}", code=resp.code)
-        try:
-            doc = yield resp.json()
-            #doc = yield resp.text()
-        except Exception as ex:
-            log.error("Error attempting to parse response.")
-            raise
-        log.debug(
-            "Received response: {response}",
-            response=doc)
+        resp_code = resp.code
+        log.debug("Response code: {code}", code=resp_code)
+        if resp_code == 200:
+            try:
+                doc = yield resp.json()
+            except Exception as ex:
+                log.error("Error attempting to parse response.")
+                raise
+            log.debug(
+                "Received response: {response}",
+                response=doc)
+            yield self.update_subject(doc, msg)
+        elif resp_code == 404:
+            self.add_subject(msg)
+        else:
+            raise Exception("Invalid response code: {0}".format(resp_code))
         returnValue(None)
+
+    @inlineCallbacks
+    def update_subject(self, account, msg):
+        """
+        Update an OrgSync account.
+        """
+        log = self.log
+        subject = msg.subject
+        log.debug("Updating subject '{subject}'", subject=subject)
+        attributes = msg.attributes
+        attrib_map = self.attribute_map
+        props = {}
+        for k, v in attributes.items():
+            prop_name = attrib_map.get(k.lower(), None)
+            if prop_name is not None:
+                props[prop_name] = v
+        http_client = self.http_client
+        prefix = self.url_prefix
+        url = "{0}{1}".format(
+            prefix,
+            self.account_update.render(
+                account=account,
+                subject=msg.subject,
+                attributes=props))
+        params = {'key': self.api_key}
+        params.update(props)
+        headers = {'Accept': ['application/json']}
+        log.debug("url: {url}", url=url)
+        log.debug("headers: {headers}", headers=headers)
+        log.debug("params: {params}", params=params)
+        try:
+            resp = yield http_client.put(url, headers=headers, params=params)
+        except Exception as ex:
+            log.error("Error attempting to update existing account.")
+            raise
+        resp_code = resp.code
+        log.debug("Response code: {code}", code=resp_code)
+        yield resp.content()
+
+    def add_subject(self, msg):
+        """
+        Add an Orgsync account.
+        """
+        log = self.log
+        log.debug("Adding a new account.")
 
     @inlineCallbacks
     def deprovision_subject(self, msg):
