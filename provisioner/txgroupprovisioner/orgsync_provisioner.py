@@ -18,7 +18,10 @@ from twisted.web.client import(
     Agent,
     HTTPConnectionPool,
 )
-from twisted.web.iweb import IAgentEndpointFactory
+from twisted.web.iweb import (
+    IAgentEndpointFactory,
+    IBodyProducer,
+)
 from twisted.logger import Logger
 from twisted.plugin import IPlugin
 from zope.interface import implements, implementer
@@ -58,6 +61,24 @@ class WebClientEndpointFactory(object):
 
     def endpointForURI(self, uri):
         return clientFromString(self.reactor, self.endpoint_s)
+
+
+class StringProducer(object):
+    implements(IBodyProducer)
+
+    def __init__(self, body):
+        self.body = body
+        self.length = len(body)
+
+    def startProducing(self, consumer):
+        consumer.write(self.body)
+        return defer.succeed(None)
+
+    def pauseProducing(self):
+        pass
+
+    def stopProducing(self):
+        pass
 
 
 class OrgsyncProvisionerFactory(object):
@@ -312,6 +333,30 @@ class OrgsyncProvisioner(object):
             attributes=props,
             subject=msg.subject)
         log.debug("Account doc: {doc}", doc=account_doc)
+        http_client = self.http_client
+        prefix = self.url_prefix
+        url = "{0}{1}".format(
+            prefix,
+            self.account_add.render(
+                account=json.dumps(account_doc),
+                subject=msg.subject))
+        params = {'key': self.api_key}
+        headers = {'Accept': ['application/json']}
+        log.debug("url: {url}", url=url)
+        log.debug("headers: {headers}", headers=headers)
+        log.debug("params: {params}", params=params)
+        try:
+            resp = yield http_client.post(
+                url, 
+                data=StringProducer(account_doc.encode('utf-8')), 
+                headers=headers, 
+                params=params)
+        except Exception as ex:
+            log.error("Error attempting to add new account.")
+            raise
+        resp_code = resp.code
+        log.debug("Response code: {code}", code=resp_code)
+        yield resp.content()
 
     @inlineCallbacks
     def deprovision_subject(self, msg):
@@ -321,12 +366,33 @@ class OrgsyncProvisioner(object):
         # Look up subject's Orgsync ID.
         # Remove subject from Orgsync.
         log = self.log
-        if False:
-            yield None
         log.debug(
             "Attempting to deprovision subject '{subject}'.",
             subject=msg.subject)
-        returnValue(None)
+        account = yield self.fetch_existing_account(msg)
+        if account is None:
+            log.debug("Account already does not exist.")
+            returnValue(None)
+        http_client = self.http_client
+        prefix = self.url_prefix
+        url = "{0}{1}".format(
+            prefix,
+            self.account_delete.render(
+                account=account,
+                subject=msg.subject))
+        params = {'key': self.api_key}
+        headers = {'Accept': ['application/json']}
+        log.debug("url: {url}", url=url)
+        log.debug("headers: {headers}", headers=headers)
+        log.debug("params: {params}", params=params)
+        try:
+            resp = yield http_client.delete(url, headers=headers, params=params)
+        except Exception as ex:
+            log.error("Error attempting to delete existing account.")
+            raise
+        resp_code = resp.code
+        log.debug("Response code: {code}", code=resp_code)
+        yield resp.content()
 
     def make_web_agent(self):
         """
