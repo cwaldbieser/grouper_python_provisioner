@@ -1,0 +1,38 @@
+{
+{# The username must match your SSO username (See NOTE above) -#}
+"username": "test@university.edu",
+{# Whether or not to send the default OrgSync welcome message (defaults false) -#}
+"send_welcome": false,
+{# 
+    The account attributes are the standard account fields. For a new account
+    the email_address, first_name, and last_name must be set. Other fields are optional
+-#}
+"account_attributes": {
+{# required for new accounts -#}
+    "email_address": "{{subject}}@lafayette.edu",
+    "first_name": "{{attributes.first_name}}",
+    "last_name": "{{attributes.last_name}}"
+{# Optional elements -#}
+{%- if 'middle_name' in attributes -%}
+    ,"middle_initial": "{{attributes.middle_name}}"
+{%- endif -%}
+{%- if 'phone_number' in attributes -%}
+    ,"phone_number": "{{attributes.phone_number}}"
+{%- endif -%}
+{%- if 'address' in attributes -%}
+    ,"address": "{{attributes.address}}"
+{%- endif -%}
+{%- if 'city' in attributes -%}
+    ,"city": "{{attributes.city}}"
+{%- endif -%}
+{%- if 'state' in attributes -%}
+    ,"state": "{{attributes.state}}"
+{%- endif -%}
+{% if 'zip' in attributes -%}
+    ,"zip": "{{attributes.zip}}"
+{%- endif -%}
+{%- if 'country' in attributes -%}
+    ,"country": "{{attributes.country}}"
+{%- endif -%}
+    }
+}

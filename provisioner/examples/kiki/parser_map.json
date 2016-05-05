@@ -1,0 +1,12 @@
+[
+    {
+        "exchange": "test_exchange",
+        "route_key": "kiki[.]grouper",
+        "parser": "pychangelogger_parser"
+    },
+    {
+        "exchange": "test_exchange",
+        "route_key": "kiki[.]delta",
+        "parser": "subject_parser"
+    }
+]

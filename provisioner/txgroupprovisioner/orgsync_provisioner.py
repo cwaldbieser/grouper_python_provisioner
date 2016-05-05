@@ -105,6 +105,9 @@ class OrgsyncProvisioner(object):
                 self.max_per_day = config.get("max_per_day", 20)
                 self.account_query = jinja2.Template(config['account_query'])
                 self.account_update = jinja2.Template(config['account_update'])
+                self.account_delete = jinja2.Template(config['account_delete'])
+                self.account_add = jinja2.Template(config['account_add'])
+                account_template_path = config['account_template']
                 attrib_map_path = config["attribute_map"]
             except KeyError as ex:
                 raise OptionMissingError(
@@ -117,6 +120,8 @@ class OrgsyncProvisioner(object):
             self.make_web_client()
             # Create the attribute map.
             self.make_attribute_map(attrib_map_path)
+            # Create the account template.
+            self.make_account_template(account_template_path)
         except Exception as ex:
             d = self.reactor.callLater(0, self.reactor.stop)
             log.failure("Provisioner failed to initialize: {0}".format(ex))
@@ -130,6 +135,11 @@ class OrgsyncProvisioner(object):
         for k, v in doc.items():
             self.attribute_map[k.lower()] = v
                      
+    def make_account_template(self, path):
+        with open(path, "r") as f:
+            data = f.read()
+        self.account_template = jinja2.Template(data)
+
     @inlineCallbacks                                                   
     def provision(self, amqp_message):             
         """                                                
@@ -196,10 +206,8 @@ class OrgsyncProvisioner(object):
         account = yield self.fetch_existing_account(msg)
         if account is not None:
             yield self.update_subject(account, msg)
-        elif resp_code == 404:
-            yield self.add_subject(msg)
         else:
-            raise Exception("Invalid response code: {0}".format(resp_code))
+            yield self.add_subject(msg)
         returnValue(None)
 
     @inlineCallbacks
@@ -252,12 +260,7 @@ class OrgsyncProvisioner(object):
         subject = msg.subject
         log.debug("Updating subject '{subject}'", subject=subject)
         attributes = msg.attributes
-        attrib_map = self.attribute_map
-        props = {}
-        for k, v in attributes.items():
-            prop_name = attrib_map.get(k.lower(), None)
-            if prop_name is not None:
-                props[prop_name] = v
+        props = self.map_attributes(attributes)
         http_client = self.http_client
         prefix = self.url_prefix
         url = "{0}{1}".format(
@@ -281,12 +284,34 @@ class OrgsyncProvisioner(object):
         log.debug("Response code: {code}", code=resp_code)
         yield resp.content()
 
+    def map_attributes(self, attribs):
+        """
+        Map subject attributes to OrgSync attributes.
+        Returns OrgSync attributes mapping.
+        """
+        attrib_map = self.attribute_map
+        props = {}
+        for k, v in attribs.items():
+            prop_name = attrib_map.get(k.lower(), None)
+            if prop_name is not None:
+                props[prop_name] = v
+        return props
+
+    @inlineCallbacks
     def add_subject(self, msg):
         """
         Add an Orgsync account.
         """
         log = self.log
+        if False:
+            yield None
         log.debug("Adding a new account.")
+        attributes = msg.attributes
+        props = self.map_attributes(attributes)
+        account_doc = self.account_template.render(
+            attributes=props,
+            subject=msg.subject)
+        log.debug("Account doc: {doc}", doc=account_doc)
 
     @inlineCallbacks
     def deprovision_subject(self, msg):
