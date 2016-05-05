@@ -341,7 +341,9 @@ class OrgsyncProvisioner(object):
                 account=json.dumps(account_doc),
                 subject=msg.subject))
         params = {'key': self.api_key}
-        headers = {'Accept': ['application/json']}
+        headers = {
+            'Accept': ['application/json'], 
+            'Content-Type': ['application/json']}
         log.debug("url: {url}", url=url)
         log.debug("headers: {headers}", headers=headers)
         log.debug("params: {params}", params=params)
@@ -381,7 +383,8 @@ class OrgsyncProvisioner(object):
                 account=account,
                 subject=msg.subject))
         params = {'key': self.api_key}
-        headers = {'Accept': ['application/json']}
+        headers = {
+            'Accept': ['application/json']}
         log.debug("url: {url}", url=url)
         log.debug("headers: {headers}", headers=headers)
         log.debug("params: {params}", params=params)
