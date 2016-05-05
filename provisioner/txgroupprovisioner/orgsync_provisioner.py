@@ -187,16 +187,29 @@ class OrgsyncProvisioner(object):
     @inlineCallbacks
     def provision_subject(self, msg):
         """
-        Provision a subject to Orgsync.
+        Provision a subject to OrgSync.
         """
         log = self.log
-        # Check if subject exists.
-        # Add or update subject record via API.
-        if False:
-            yield None
         log.debug(
             "Attempting to provision subject '{subject}'.",
             subject=msg.subject)
+        account = yield self.fetch_existing_account(msg)
+        if account is not None:
+            yield self.update_subject(account, msg)
+        elif resp_code == 404:
+            yield self.add_subject(msg)
+        else:
+            raise Exception("Invalid response code: {0}".format(resp_code))
+        returnValue(None)
+
+    @inlineCallbacks
+    def fetch_existing_account(self, msg):
+        """
+        Fetch an existing account and return it or None if it does not
+        exist.
+        """
+        log = self.log
+        log.debug("Attempting to fetch existing account.")
         http_client = self.http_client
         prefix = self.url_prefix
         url = "{0}{1}".format(
@@ -206,7 +219,7 @@ class OrgsyncProvisioner(object):
                 attributes=msg.attributes))
         params = {'key': self.api_key}
         headers = {'Accept': ['application/json']}
-        log.debug("url: {url}", url=url)
+        log.debug("URL (GET): {url}", url=url)
         log.debug("headers: {headers}", headers=headers)
         log.debug("params: {params}", params=params)
         try:
@@ -215,7 +228,6 @@ class OrgsyncProvisioner(object):
             log.error("Error attempting to retrieve existing account.")
             raise
         resp_code = resp.code
-        log.debug("Response code: {code}", code=resp_code)
         if resp_code == 200:
             try:
                 doc = yield resp.json()
@@ -225,12 +237,11 @@ class OrgsyncProvisioner(object):
             log.debug(
                 "Received response: {response}",
                 response=doc)
-            yield self.update_subject(doc, msg)
+            returnValue(doc)
         elif resp_code == 404:
-            self.add_subject(msg)
+            returnValue(None)
         else:
             raise Exception("Invalid response code: {0}".format(resp_code))
-        returnValue(None)
 
     @inlineCallbacks
     def update_subject(self, account, msg):
