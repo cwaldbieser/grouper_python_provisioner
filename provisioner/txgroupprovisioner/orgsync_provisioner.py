@@ -315,7 +315,11 @@ class OrgsyncProvisioner(object):
         for k, v in attribs.items():
             prop_name = attrib_map.get(k.lower(), None)
             if prop_name is not None:
-                props[prop_name] = v
+                if len(v) > 0:
+                    value = v[0]
+                else:
+                    continue
+                props[prop_name] = value
         return props
 
     @inlineCallbacks

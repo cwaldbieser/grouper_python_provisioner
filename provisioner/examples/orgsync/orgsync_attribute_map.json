@@ -1,5 +1,4 @@
 {
-    "new_username": "username",
     "email": "email",
     "first_name": "first_name",
     "last_name": "last_name",
@@ -9,5 +8,5 @@
     "country": "country",
     "address": "address",
     "zip": "zip",
-    "lnumber": "custom_profile_responses[1781230]"
+    "lnumber": "profile_responses[1781230]"
 }
