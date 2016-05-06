@@ -1,12 +1,11 @@
 {
-    "email": "email",
-    "first_name": "first_name",
-    "last_name": "last_name",
-    "phone": "phone_number",
-    "city": "city",
-    "state": "state",
-    "country": "country",
-    "address": "address",
-    "zip": "zip",
-    "lnumber": "profile_responses[1781230]"
+    "username": "{{(attributes.new_username and attributes.new_username[0]) or subject}}@lafayette.edu",
+    "profile_responses[1781230]": "{{attributes.lnumber[0]}}",
+    "email": "{{attributes.email[0]}}",
+    "first_name": "{{attributes.first_name[0]}}",
+    "last_name": "{{attributes.last_name[0]}}",
+    "phone_number": "{{attributes.phone and attributes.phone[0]}}",
+    "city": "{{attributes.city and attributes.city[0]}}",
+    "state": "{{attributes.state and attributes.state[0]}}",
+    "zip": "{{attributes.zip and attributes.zip[0]}}"
 }

@@ -120,6 +120,7 @@ class OrgsyncProvisioner(object):
                 event_type='init_provisioner')
             # Load API configuration info-- endpoint info, URL, API key.
             try:
+                self.diagnostic_mode = bool(config.get("diagnostic_mode", False))
                 self.endpoint_s = config.get("endpoint", None)
                 self.url_prefix = config["url_prefix"]
                 self.api_key = config["api_key"]
@@ -154,7 +155,13 @@ class OrgsyncProvisioner(object):
             doc = commentjson.load(f)
         self.attribute_map = {}
         for k, v in doc.items():
-            self.attribute_map[k.lower()] = v
+            try:
+                self.attribute_map[k.lower()] = jinja2.Template(v)
+            except jinja2.exceptions.TemplateError as ex:
+                log.error(
+                    "Error parsing attribute template for '{attribute}'",
+                    attribute=k)
+                raise
                      
     def make_account_template(self, path):
         with open(path, "r") as f:
@@ -193,6 +200,7 @@ class OrgsyncProvisioner(object):
     def get_config_defaults(self):
         return dedent("""\
             [PROVISIONER]
+            diagnostic_mode = 0
             url_prefix = https://api.orgsync.com/api/v2
             """)
 
@@ -245,7 +253,8 @@ class OrgsyncProvisioner(object):
             prefix,
             self.account_query.render(
                 subject=msg.subject,
-                attributes=msg.attributes))
+                attributes=msg.attributes,
+                action=msg.action))
         params = {'key': self.api_key}
         headers = {'Accept': ['application/json']}
         log.debug("URL (GET): {url}", url=url)
@@ -281,7 +290,7 @@ class OrgsyncProvisioner(object):
         subject = msg.subject
         log.debug("Updating subject '{subject}'", subject=subject)
         attributes = msg.attributes
-        props = self.map_attributes(attributes)
+        props = self.map_attributes(attributes, subject, msg.action)
         http_client = self.http_client
         prefix = self.url_prefix
         url = "{0}{1}".format(
@@ -296,29 +305,29 @@ class OrgsyncProvisioner(object):
         log.debug("url: {url}", url=url)
         log.debug("headers: {headers}", headers=headers)
         log.debug("params: {params}", params=params)
-        try:
-            resp = yield http_client.put(url, headers=headers, params=params)
-        except Exception as ex:
-            log.error("Error attempting to update existing account.")
-            raise
-        resp_code = resp.code
-        log.debug("Response code: {code}", code=resp_code)
-        yield resp.content()
+        if not self.diagnostic_mode:
+            try:
+                resp = yield http_client.put(url, headers=headers, params=params)
+            except Exception as ex:
+                log.error("Error attempting to update existing account.")
+                raise
+            resp_code = resp.code
+            log.debug("Response code: {code}", code=resp_code)
+            yield resp.content()
 
-    def map_attributes(self, attribs):
+    def map_attributes(self, attribs, subject, action):
         """
         Map subject attributes to OrgSync attributes.
         Returns OrgSync attributes mapping.
         """
         attrib_map = self.attribute_map
         props = {}
-        for k, v in attribs.items():
-            prop_name = attrib_map.get(k.lower(), None)
-            if prop_name is not None:
-                if len(v) > 0:
-                    value = v[0]
-                else:
-                    continue
+        for prop_name, template in attrib_map.items():
+            value = template.render(
+                subject=subject,
+                attributes=attribs,
+                action=action)
+            if value != u'\x00':
                 props[prop_name] = value
         return props
 
@@ -332,10 +341,11 @@ class OrgsyncProvisioner(object):
             yield None
         log.debug("Adding a new account.")
         attributes = msg.attributes
-        props = self.map_attributes(attributes)
+        props = self.map_attributes(attributes, subject, msg.action)
         account_doc = self.account_template.render(
             attributes=props,
-            subject=msg.subject)
+            subject=msg.subject,
+            action=msg.action)
         log.debug("Account doc: {doc}", doc=account_doc)
         http_client = self.http_client
         prefix = self.url_prefix
@@ -351,26 +361,25 @@ class OrgsyncProvisioner(object):
         log.debug("url: {url}", url=url)
         log.debug("headers: {headers}", headers=headers)
         log.debug("params: {params}", params=params)
-        try:
-            resp = yield http_client.post(
-                url, 
-                data=StringProducer(account_doc.encode('utf-8')), 
-                headers=headers, 
-                params=params)
-        except Exception as ex:
-            log.error("Error attempting to add new account.")
-            raise
-        resp_code = resp.code
-        log.debug("Response code: {code}", code=resp_code)
-        yield resp.content()
+        if not self.diagnostic_mode:
+            try:
+                resp = yield http_client.post(
+                    url, 
+                    data=StringProducer(account_doc.encode('utf-8')), 
+                    headers=headers, 
+                    params=params)
+            except Exception as ex:
+                log.error("Error attempting to add new account.")
+                raise
+            resp_code = resp.code
+            log.debug("Response code: {code}", code=resp_code)
+            yield resp.content()
 
     @inlineCallbacks
     def deprovision_subject(self, msg):
         """
         Deprovision a subject from Orgsync.
         """
-        # Look up subject's Orgsync ID.
-        # Remove subject from Orgsync.
         log = self.log
         log.debug(
             "Attempting to deprovision subject '{subject}'.",
@@ -392,14 +401,15 @@ class OrgsyncProvisioner(object):
         log.debug("url: {url}", url=url)
         log.debug("headers: {headers}", headers=headers)
         log.debug("params: {params}", params=params)
-        try:
-            resp = yield http_client.delete(url, headers=headers, params=params)
-        except Exception as ex:
-            log.error("Error attempting to delete existing account.")
-            raise
-        resp_code = resp.code
-        log.debug("Response code: {code}", code=resp_code)
-        yield resp.content()
+        if not self.diagnostic_mode:
+            try:
+                resp = yield http_client.delete(url, headers=headers, params=params)
+            except Exception as ex:
+                log.error("Error attempting to delete existing account.")
+                raise
+            resp_code = resp.code
+            log.debug("Response code: {code}", code=resp_code)
+            yield resp.content()
 
     def make_web_agent(self):
         """
