@@ -1,21 +1,10 @@
 
-from collections import namedtuple
 import json
 
 ADD_ACTION = "add"
 DELETE_ACTION = "delete"
 UPDATE_ACTION = "update"
 MEMBSYNC_ACTION = "memb_sync"
-
-
-Instructions = namedtuple(
-    'Instructions',
-    [
-        'action',
-        'group',
-        'subject', 
-        'attributes',
-    ])
 
 
 class BaseMsg(object):
@@ -38,6 +27,11 @@ class BaseMsg(object):
 
 
 class MembershipChangeMsg(BaseMsg):
+    """
+    A message that describes a membership change (either an add or a delete)
+    for a group and a single subject.  Attributes may be populated if any 
+    provisioning targets are determined to require them.
+    """
     msg_type = "membership_change"
 
     def __init__(self, action, group, subject):
@@ -48,6 +42,9 @@ class MembershipChangeMsg(BaseMsg):
 
 
 class SubjectChangedMsg(BaseMsg):
+    """
+    A notification that one or more attrbutes for a subject have changed.
+    """
     msg_type = "subject_change"
     action = UPDATE_ACTION
 
@@ -57,9 +54,15 @@ class SubjectChangedMsg(BaseMsg):
 
 
 class FullSyncMsg(BaseMsg):
+    """
+    A request that any receiving provisioners examine the complete membership
+    list for a group and perform whatever changes are necessary to mirror that
+    membership in their provisioning targets.
+    """
     msg_type = "full_sync"
 
     def __init__(self, group):
         self.group = group
         self.subjects = []
+
 

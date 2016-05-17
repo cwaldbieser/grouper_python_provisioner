@@ -34,6 +34,7 @@ from interface import (
     IProvisioner,
     IRouterFactory,
 )
+import kikimessage
 from utils import get_plugin_factory
 
 
@@ -113,45 +114,53 @@ class KikiProvisioner(object):
             log.debug(
                 "Created message parser '{parser_type}'.",
                 parser_type=msg_parser.__class__.__name__)
-            instructions = msg_parser.parse_message(amqp_message)
-            subject = instructions.subject
-            log.debug("Parsed instructions from message.")
-            if instructions.group is None:
+            parsed = msg_parser.parse_message(amqp_message)
+            msg_type = parsed.msg_type
+            log.debug("Parsed message of type '{msg_type}'.", msg_type=msg_type)
+            msgs_with_subjects = (
+                kikimessage.MembershipChangeMsg.msg_type,
+                kikimessage.SubjectChangedMsg.msg_type)
+            if msg_type in msgs_with_subjects:
+                subject = parsed.subject
+                if msg_type = kikimessage.SubjectChangedMsg.msg_type:
+                    log.debug(
+                        "Looking up groups for subject {subject}",
+                        subject=subject)
+                    groups = yield self.map_subject_to_groups(parsed.subject)
+                else:
+                    groups = [parsed.group] 
+                log.debug("Groups used for routing: {groups}", groups=groups)
+                if len(groups) == 0:
+                    log.debug(
+                        "Subject '{subject}' does not belong "
+                        "to any groups of interest.",
+                        subject=subject)
+                    returnValue(None)
+                target_route_key, attributes_required = yield self.get_route_info(parsed, groups)
                 log.debug(
-                    "No assigned group-- "
-                    "looking up groups for subject {subject}",
-                    subject=subject)
-                groups = yield self.map_subject_to_groups(instructions.subject)
+                    "Routing results: route_key={route_key}, "
+                    "attributes_required={attributes_required}",
+                    route_key=target_route_key,
+                    attributes_required=attributes_required)
+                if target_route_key is None:
+                    log.debug("Discarding message based on route.")
+                    returnValue(None)
+                if attributes_required:
+                    log.debug(
+                        "Looking up attributes for subject {subject}.",
+                        subject=subject)
+                    attribs = yield self.query_subject(parsed)
+                    parsed.attributes.update(attribs)
+                    log.debug(
+                        "Final attributes: {attributes}",
+                        attributes=parsed.attributes)
+                log.debug("Delivering message to exchange ...")
+                yield self.send_message(
+                    target_route_key, parsed, attributes_required)
             else:
-                groups = [instructions.group] 
-            log.debug("Groups used for routing: {groups}", groups=groups)
-            if len(groups) == 0:
-                log.debug(
-                    "Subject '{subject}' does not belong "
-                    "to any groups of interest.",
-                    subject=subject)
-                returnValue(None)
-            target_route_key, attributes_required = yield self.get_route_info(instructions, groups)
-            log.debug(
-                "Routing results: route_key={route_key}, "
-                "attributes_required={attributes_required}",
-                route_key=target_route_key,
-                attributes_required=attributes_required)
-            if target_route_key is None:
-                log.debug("Discarding message based on route.")
-                returnValue(None)
-            if attributes_required:
-                log.debug(
-                    "Looking up attributes for subject {subject}.",
-                    subject=subject)
-                attribs = yield self.query_subject(instructions)
-                instructions.attributes.update(attribs)
-                log.debug(
-                    "Final attributes: {attributes}",
-                    attributes=instructions.attributes)
-            log.debug("Delivering message to exchange ...")
-            yield self.send_message(
-                target_route_key, instructions, attributes_required)
+                raise Exception(
+                    "Handling of msg_type '{msg_type}' has not been implemented.",
+                    msg_type=msg_type)
         except Exception as ex:
             log.warn("Error provisioning target: {error}", error=ex)
             raise
@@ -365,15 +374,7 @@ class KikiProvisioner(object):
         """
         log = self.log
         exchange = self.pub_exchange
-        message = {
-            "action": instructions.action,
-            "subject": instructions.subject
-        }
-        if attributes_required:
-            message["attributes"] = dict(instructions.attributes)
-        if instructions.group is not None:
-            message["group"] = instructions.group
-        serialized = json.dumps(message)
+        serialized = instructions.serialize()
         msg = Content(serialized)
         msg["delivery-mode"] = 2
         success = False

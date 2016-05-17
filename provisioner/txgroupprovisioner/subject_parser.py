@@ -2,8 +2,7 @@
 from twisted.plugin import IPlugin
 from zope.interface import implements
 from kikimessage import (
-    UPDATE_ACTION,
-    Instructions,
+    SubjectChangeMsg,
 )
 from txgroupprovisioner.interface import (
     IMessageParserFactory, 
@@ -29,13 +28,6 @@ class SubjectMessageParser(object):
         """
         body = msg.content.body
         subject = body.strip("\n")
-        action = UPDATE_ACTION
-        group = None
-        attributes = {}
-        instructions = Instructions(
-            action,
-            group,
-            subject,
-            attributes)
-        return instructions
+        parsed = SubjectChangedMsg(subject)
+        return parsed
 

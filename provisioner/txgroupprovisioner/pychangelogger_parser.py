@@ -4,7 +4,7 @@ from zope.interface import implements
 from kikimessage import (
     ADD_ACTION,
     DELETE_ACTION,
-    Instructions,
+    MembershipChangeMsg,
 )
 from txgroupprovisioner.interface import (
     IMessageParserFactory, 
@@ -34,15 +34,12 @@ class PyChangeloggerMessageParser(object):
         subject = parts[1]
         action = parts[2]
         if action.startswith("delete"):
-            attributes = None
             action = DELETE_ACTION
         else:
-            attributes = {}
             action = ADD_ACTION
-        instructions = Instructions(
+        parsed = MembershipChangeMsg(
             action,
             group,
-            subject,
-            attributes)
-        return instructions
+            subject)
+        return parsed
 
