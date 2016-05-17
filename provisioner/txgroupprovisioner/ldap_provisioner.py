@@ -25,12 +25,11 @@ from twisted.internet import task, threads
 from twisted.internet.task import LoopingCall
 from twisted.logger import Logger
 from txgroupprovisioner.interface import IProvisionerFactory, IProvisioner
-from txgroupprovisioner.kikimessage import (
-    ADD_ACTION,
-    DELETE_ACTION,
-)
+from txgroupprovisioner import constants
+
 
 LDAPGroupTarget = namedtuple("LDAPTargetGroup", ['group', 'create_group', 'create_context'])
+
 
 class LDAPProvisionerFactory(object):
     implements(IPlugin, IProvisionerFactory)
@@ -56,6 +55,10 @@ class LDAPProvisioner(object):
     subject_id_attribute = 'uid'
     group_attrib_type = 'cn'
     subject_chunk_size = 15
+    provisioner_state = None
+    IDLE = 0
+    PROCESSING_REQUESTS = 1
+    MEMBERSHIP_SYNC = 2
 
     @inlineCallbacks
     def load_config(self, config_file, default_log_level, logObserverFactory):
@@ -132,6 +135,7 @@ class LDAPProvisioner(object):
         processor = LoopingCall(self.process_requests)
         processor.start(self.batch_time)
         self.processor = processor
+        self.provisioner_state = self.IDLE
 
     def getConfigDefaults(self):
         return dedent("""\
@@ -229,50 +233,80 @@ class LDAPProvisioner(object):
         serialized = msg.content.body
         doc = loads(serialized)
         try:
-            group = doc["group"]
-            subject = doc["subject"]
             action = doc["action"]
+            add_delete_actions = (
+                constants.ACTION_ADD,
+                constants.ACTION_DELETE,
+            )
+            if action == constants.ACTION_MEMBERSHIP_SYNC:
+                subjects = doc["subjects"]
+                group = doc["group"]
+            elif action in add_delete_actions:
+                group = doc["group"]
+                subject = doc["subject"]
+            else:
+                log.warn(
+                    "Unknown action '{action}'.  Discarding.  Message was:\n{msg}",
+                    msg=serialized)
+                returnValue(None)
         except KeyError as ex:
             log.warn("Invalid message received.  Discarding.  Message was {msg}.", 
                 event_type="invalid_message_error",
                 msg=serialized)
             returnValue(None)
-        db_str = self.config['sqlite_db']
+        if action == constants.ACTION_MEMBERSHIP_SYNC:
+            yield self.perform_membership_sync(group, subjects) 
+        elif action in add_delete_actions:
+            db_str = self.config['sqlite_db']
+            try:
+                yield self.add_action_to_intake(group, action, subject)
+            except Exception as ex:
+                log.failure("Error adding provision request to intake.")
+                raise
+            log.debug(
+                "Recorded provision request.",
+                event_type='provision_request_scheduled',
+                group=group,
+                subject=subject,
+                action=action)
+
+    @inlineCallbacks
+    def perform_membership_sync(self, group, subjects):
+        if False:
+            yield None
+        delay_time = 10
+        while self.provisioner_state != self.IDLE:
+            yield delay(self.reactor, delay_time)
+        self.provisioner_state = self.MEMBERSHIP_SYNC
         try:
-            d = yield self.add_action_to_intake(group, action, subject)
-        except Exception as ex:
-            log.failure("Error adding provision request to intake.")
-            raise
-            
-        log.debug(
-            "Scheduled provision request to be recorded.",
-            event_type='provision_request_scheduled',
-            group=group,
-            subject=subject,
-            action=action)
+            log.debug("Performing membership sync for group '{group}'.", 
+                group=group)
+            returnValue(None)
+        finally:
+            self..provisioner_state = self.IDLE
 
+    @inlineCallbacks
     def process_requests(self):
+        """
+        Process the requests recorded in the provisioner's internal database.
+        """
         log = self.log
-        log.debug("LDAP provisioner processing queued requests ...",    
-            event_type='provisioner_begin_process_requests')
-        service_state = self.service_state
-
-        def set_last_update(result, service_state):
-            """
-            Set the last-updated time on the service state.
-            """
-            service_state.last_update = datetime.datetime.today()
-            log.debug("LDAP provisioner last process loop successful.")
-            return result
-
-        def handleError(error, log):
-            log.failure("Error while processing provisioning request(s): ", failure=error)
-            
-        d = self.provision_ldap()
-        d.addCallback(set_last_update, service_state)
-        #If there is an error, log it, but keep on looping.
-        d.addErrback(handleError, self.log)
-        return d
+        if not self.provisioner_state == self.IDLE:
+            returnValue(None)
+        self.provisioner_state = self.PROCESSING_REQUESTS
+        try:
+            log.debug("LDAP provisioner processing queued requests ...",    
+                event_type='provisioner_begin_process_requests')
+            service_state = self.service_state
+            try:
+                yield self.provision_ldap()
+            except Exception as ex:
+                log.failure("Error while processing provisioning request(s)")
+            else:
+                service_state.last_update = datetime.datetime.today()
+                log.debug("LDAP provisioner last process loop successful.")
+        finally:
+            self.provisioner_state = self.IDLE
     
     def group_to_ldap_group(self, g):
         log = self.log
@@ -387,10 +421,10 @@ class LDAPProvisioner(object):
                     yield self.runDBCommand(
                         '''DELETE FROM groups WHERE grp = ?;''', [group], is_query=False)
                     continue
-                memb_add_results = yield self.runDBCommand(memb_add_sql, [groupid, ADD_ACTION])
+                memb_add_results = yield self.runDBCommand(memb_add_sql, [groupid, constants.ACTION_ADD])
                 add_membs = set([r[0] for r in memb_add_results])
                 del memb_add_results
-                memb_del_results = yield self.runDBCommand(memb_del_sql, [groupid, DELETE_ACTION])
+                memb_del_results = yield self.runDBCommand(memb_del_sql, [groupid, constants.ACTION_DELETE])
                 del_membs = set([r[0] for r in memb_del_results])
                 del memb_del_results
                 if len(add_membs) > 0 or len(del_membs) > 0:
@@ -407,11 +441,11 @@ class LDAPProvisioner(object):
                     mapped_groups[target.group] = group_dn
             results = yield self.runDBCommand(subj_sql)
             for (subject_id,) in results: 
-                add_results = yield self.runDBCommand(subj_add_sql, [subject_id, ADD_ACTION])
+                add_results = yield self.runDBCommand(subj_add_sql, [subject_id, constants.ACTION_ADD])
                 add_membs = [self.group_to_ldap_group(r[0]) for r in add_results]
                 del add_results
                 add_membs = set(mapped_groups[t.group] for t in add_membs if t is not None)
-                del_results = yield self.runDBCommand(subj_del_sql, [subject_id, DELETE_ACTION])
+                del_results = yield self.runDBCommand(subj_del_sql, [subject_id, constants.ACTION_DELETE])
                 del_membs = [self.group_to_ldap_group(r[0]) for r in del_results]
                 del del_results
                 del_membs = set(mapped_groups[t.group] for t in del_membs if t is not None)
@@ -782,3 +816,11 @@ def escape_filter_chars(assertion_value,escape_mode=0):
 
 def normalize_dn(dn):
     return DistinguishedName(tuple(RelativeDistinguishedName(str(r).lower()) for r in dn.listOfRDNs))
+
+@inlineCallbacks            
+def delay(reactor, seconds):
+    """
+    A Deferred that fires after `seconds` seconds.
+    """
+    yield task.deferLater(reactor, seconds, lambda x: None)
+

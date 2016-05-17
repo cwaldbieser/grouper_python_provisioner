@@ -1,9 +1,8 @@
 
 from twisted.plugin import IPlugin
 from zope.interface import implements
+import constants
 from kikimessage import (
-    ADD_ACTION,
-    DELETE_ACTION,
     MembershipChangeMsg,
 )
 from txgroupprovisioner.interface import (
@@ -34,9 +33,9 @@ class PyChangeloggerMessageParser(object):
         subject = parts[1]
         action = parts[2]
         if action.startswith("delete"):
-            action = DELETE_ACTION
+            action = constants.ACTION_DELETE
         else:
-            action = ADD_ACTION
+            action = constants.ACTION_ADD
         parsed = MembershipChangeMsg(
             action,
             group,

@@ -3,8 +3,6 @@ import json
 from twisted.plugin import IPlugin
 from zope.interface import implements
 from kikimessage import (
-    ADD_ACTION,
-    DELETE_ACTION,
     BasicFullSyncMsg,
 )
 from txgroupprovisioner.interface import (

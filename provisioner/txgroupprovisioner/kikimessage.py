@@ -1,10 +1,7 @@
 
 import json
 from twisted.internet import defer
-
-ADD_ACTION = "add"
-DELETE_ACTION = "delete"
-UPDATE_ACTION = "update"
+from txgroupprovisioner import constants
 
 
 class BaseMsg(object):
@@ -98,7 +95,7 @@ class SubjectChangedMsg(BaseMsg):
     """
     A notification that one or more attrbutes for a subject have changed.
     """
-    action = UPDATE_ACTION
+    action = constants.ACTION_UPDATE
 
     def __init__(self, subject):
         self.subject = subject
@@ -129,6 +126,7 @@ class BasicFullSyncMsg(BaseMsg):
     list for a group and perform whatever changes are necessary to mirror that
     membership in their provisioning targets.
     """
+    action = MEMBERSHIP_FULL_SYNC
 
     def __init__(self, group, subjects):
         self.group = group

@@ -26,17 +26,13 @@ from twisted.logger import Logger
 from twisted.plugin import IPlugin
 from zope.interface import implements, implementer
 from config import load_config, section2dict
+import constants
 from errors import (
     OptionMissingError,
 )
 from interface import (
     IProvisionerFactory,
     IProvisioner,
-)
-from kikimessage import (
-    ADD_ACTION,
-    DELETE_ACTION,
-    UPDATE_ACTION,
 )
 from utils import get_plugin_factory
 
@@ -184,10 +180,10 @@ class OrgsyncProvisioner(object):
             log.warn("Error parsing message: {error}", error=ex)
             raise
         try:
-            if msg.action in (ADD_ACTION, UPDATE_ACTION):
+            if msg.action in (constants.ACTION_ADD, constants.ACTION_UPDATE):
                 yield self.provision_subject(msg)
                 self.daily_count = self.daily_count + 1
-            elif msg.action == DELETE_ACTION:
+            elif msg.action == constants.ACTION_DELETE:
                 yield self.deprovision_subject(msg)
                 self.daily_count = self.daily_count + 1
             else:
@@ -219,7 +215,7 @@ class OrgsyncProvisioner(object):
         action = doc['action']
         subject = doc['subject']
         attributes = None
-        if action  != DELETE_ACTION:
+        if action  != constants.ACTION_DELETE:
             attributes = doc['attributes']
         return ParsedMessage(action, subject, attributes)
 

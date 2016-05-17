@@ -337,7 +337,7 @@ class KikiProvisioner(object):
         msg["delivery-mode"] = 2
         success = False
         reconnect = False
-        delay = 20
+        delay_time = 20
         while not success:
             try:
                 if reconnect:
@@ -353,7 +353,7 @@ class KikiProvisioner(object):
             except Exception as ex:
                 log.warn("Error attempting to publish message: {error}", error=ex)
                 log.warn("Will attempt to reconnect.")
-                yield task.deferLater(reactor, delay, lambda x: None)
+                yield delay(self.reactor, delay_time)
                 reconnect = True
         log.debug(
             "Sent message to target exchange '{exchange}' with routing key '{route_key}'.",
@@ -364,12 +364,12 @@ class KikiProvisioner(object):
             event_type="amqp_send_msg",
             msg=serialized)
 
-            
+@inlineCallbacks            
 def delay(reactor, seconds):
     """
     A Deferred that fires after `seconds` seconds.
     """
-    yield task.deferLater(reactor, seconds, provisioner.provision, msg)
+    yield task.deferLater(reactor, seconds, lambda x: None)
 
 def get_config_opt(config, section, opt):
     """
