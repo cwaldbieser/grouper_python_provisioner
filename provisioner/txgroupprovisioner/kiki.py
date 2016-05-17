@@ -115,52 +115,30 @@ class KikiProvisioner(object):
                 "Created message parser '{parser_type}'.",
                 parser_type=msg_parser.__class__.__name__)
             parsed = msg_parser.parse_message(amqp_message)
-            msg_type = parsed.msg_type
+            msg_type = parsed.__class__.__name__
             log.debug("Parsed message of type '{msg_type}'.", msg_type=msg_type)
-            msgs_with_subjects = (
-                kikimessage.MembershipChangeMsg.msg_type,
-                kikimessage.SubjectChangedMsg.msg_type)
-            if msg_type in msgs_with_subjects:
-                subject = parsed.subject
-                if msg_type = kikimessage.SubjectChangedMsg.msg_type:
-                    log.debug(
-                        "Looking up groups for subject {subject}",
-                        subject=subject)
-                    groups = yield self.map_subject_to_groups(parsed.subject)
-                else:
-                    groups = [parsed.group] 
-                log.debug("Groups used for routing: {groups}", groups=groups)
-                if len(groups) == 0:
-                    log.debug(
-                        "Subject '{subject}' does not belong "
-                        "to any groups of interest.",
-                        subject=subject)
-                    returnValue(None)
-                target_route_key, attributes_required = yield self.get_route_info(parsed, groups)
+            mapper = self.group_mapper
+            log.debug("Getting groups for message ...")
+            groups = yield parsed.get_groups(mapper)
+            log.debug("Groups used for routing: {groups}", groups=groups)
+            if len(groups) == 0:
                 log.debug(
-                    "Routing results: route_key={route_key}, "
-                    "attributes_required={attributes_required}",
-                    route_key=target_route_key,
-                    attributes_required=attributes_required)
-                if target_route_key is None:
-                    log.debug("Discarding message based on route.")
-                    returnValue(None)
-                if attributes_required:
-                    log.debug(
-                        "Looking up attributes for subject {subject}.",
-                        subject=subject)
-                    attribs = yield self.query_subject(parsed)
-                    parsed.attributes.update(attribs)
-                    log.debug(
-                        "Final attributes: {attributes}",
-                        attributes=parsed.attributes)
-                log.debug("Delivering message to exchange ...")
-                yield self.send_message(
-                    target_route_key, parsed, attributes_required)
-            else:
-                raise Exception(
-                    "Handling of msg_type '{msg_type}' has not been implemented.",
-                    msg_type=msg_type)
+                    "Message did not produce any groups of interest.")
+                returnValue(None)
+            target_route_key, attributes_required = yield self.get_route_info(parsed, groups)
+            log.debug(
+                "Routing results: route_key={route_key}, "
+                "attributes_required={attributes_required}",
+                route_key=target_route_key,
+                attributes_required=attributes_required)
+            if target_route_key is None:
+                log.debug("Discarding message based on route.")
+                returnValue(None)
+            if attributes_required:
+                log.debug("Resolving attributes for message ...")
+                yield parsed.resolve_attributes(self.attrib_resolver)
+            log.debug("Delivering message to exchange ...")
+            yield self.send_message(target_route_key, parsed)
         except Exception as ex:
             log.warn("Error provisioning target: {error}", error=ex)
             raise
@@ -337,26 +315,6 @@ class KikiProvisioner(object):
         yield self.pub_channel.channel_open()
 
     @inlineCallbacks
-    def map_subject_to_groups(self, subject):
-        """
-        Return a list of groups for which `subject` is a member.
-        """
-        mapper = self.group_mapper
-        groups = yield self.group_mapper.get_groups_for_subject(subject)
-        returnValue(groups)
-
-    @inlineCallbacks
-    def query_subject(self, instructions):
-        """
-        Return a dictionary of attribute mappings for a subject.
-        """
-        # Attributes requested/returned should be based on some kind of 
-        # filter / mapping / logic.
-        subject = instructions.subject
-        attributes = yield self.attrib_resolver.resolve_attributes(subject)
-        returnValue(attributes)
-
-    @inlineCallbacks
     def get_route_info(self, instructions, groups):
         """
         Get the target route information  based on the instructions parsed from the 
@@ -367,7 +325,7 @@ class KikiProvisioner(object):
         returnValue(route_info)
 
     @inlineCallbacks
-    def send_message(self, route_key, instructions, attributes_required):
+    def send_message(self, route_key, instructions):
         """
         Compose a provisioning message and deliver it to an exchange with
         routing key `route_key`.
