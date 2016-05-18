@@ -55,6 +55,8 @@ class LDAPProvisioner(object):
     subject_id_attribute = 'uid'
     group_attrib_type = 'cn'
     subject_chunk_size = 15
+    provision_user = 0
+    provision_group = 0
     provisioner_state = None
     IDLE = 0
     PROCESSING_REQUESTS = 1
@@ -144,8 +146,8 @@ class LDAPProvisioner(object):
         group_map = groupmap.json
         url = ldap://127.0.0.1:389/
         start_tls = 1
-        provision_group = 1
-        provision_user = 1
+        provision_group = 0
+        provision_user = 0
         group_attribute = member
         user_attribute = memberOf
         group_value_type = dn
@@ -273,24 +275,32 @@ class LDAPProvisioner(object):
     @inlineCallbacks
     def perform_membership_sync(self, group, subjects):
         log = self.log
+        log.debug("Initializing group membership sync.")
         delay_time = 10
         while self.provisioner_state != self.IDLE:
+            log.debug("Normal operations in progress.  Delaying group sync.")
             yield delay(self.reactor, delay_time)
         self.provisioner_state = self.MEMBERSHIP_SYNC
         try:
             log.debug("Performing membership sync for group '{group}'.", 
                 group=group)
+            log.debug("{count} subjects provided for sync.",
+                count=len(subjects))
             target = self.group_to_ldap_group(group)
             client = yield self.get_ldap_client()
             try:
+                log.debug("Applying changes to the LDAP group ...")
                 group_dn, members = yield self.apply_changes_to_ldap_group(
                     target=target, adds=subjects, deletes=None, client=client)
+                log.debug("Applying changes to LDAP members ...")
                 yield self.sync_members_to_ldap_group(client, str(group_dn), members)
             finally:
                 if client.connected:
                     client.unbind()
+                log.debug("Disconnected from LDAP.")
         finally:
             self.provisioner_state = self.IDLE
+            log.debug("Provisioner state set back to IDLE.")
 
     @inlineCallbacks
     def sync_members_to_ldap_group(self, client, group_dn, ldap_members):
@@ -300,8 +310,9 @@ class LDAPProvisioner(object):
         appear in `ldap_members`.
         Add the membership to entries that do appear in `ldap_members`.
         """
-        provision_user = self.provision_user
         log = self.log
+        provision_user = self.provision_user
+        log.debug("`provision_user` == {provision_user}", provision_user=provision_user)
         if not provision_user:
             returnValue(None)
         user_attribute = self.user_attribute
@@ -318,38 +329,47 @@ class LDAPProvisioner(object):
         try:
             results = yield o.search(filterText=fltr, attributes=[user_attribute]) 
         except Exception as ex:
-            self.log.error(
+            log.error(
                 "Error while searching for LDAP entries with {user_attribute}={group_dn}",
                 user_attribute=user_attribute,
                 group_dn=group_dn) 
             raise
+        log.debug("LDAP account entries have been retrieved.")
         # Remove the group from entries that aren't on the subject list.
         # If an entry is on the list, keep track of it so we don't need to
         # update it later.
+        log.debug("Removing group DN from entries that are not in the subject list ...")
         batch = []
         processed = set([])
         for entry in results: 
             entry_dn = normalize_dn(entry.dn)
+            log.debug("Processing entry '{entry_dn}'.", entry_dn=entry_dn)
             if entry_dn not in ldap_members:
                 groups = set([m.lower() for m in entry[user_attribute]])
+                orig_group_size = len(groups)
                 groups = groups - set([group_dn])
                 groups = list(groups)
                 groups.sort()
+                new_group_size = len(groups)
                 entry[user_attribute] = groups
                 log.debug(
-                    "Scheduling entry '{entry_dn}' to have memberships: {groups}",
+                    "Scheduling entry '{entry_dn}' to have new memberships. Group count went from {old_count} => {new_count}",
                     entry_dn=entry_dn,
-                    groups=groups)
+                    old_count=orig_group_size,
+                    new_count=new_group_size)
                 batch.append(entry.commit())
                 if len(batch) >= subject_chunk_size:
                     log.debug("Committing scheduled batch ...")
                     yield gatherResults(batch)            
+                    log.debug("Committed batch.")
                     batch = []
             else:
-                processed.add(str(normalize_dn(entry_dn)))
+                log.debug("Entry belongs in group.")
+                processed.add(str(entry_dn))
         if len(batch) > 0:
             log.debug("Committing scheduled batch ...")
             yield gatherResults(batch)            
+            log.debug("Committed batch.")
         # Finally, update all the subject entries that ought to be one the list
         # but weren't.
         log.debug(
@@ -359,13 +379,17 @@ class LDAPProvisioner(object):
         log.debug(
             "Members to process => {ldap_members}",
             ldap_members=ldap_members)
+        log.debug("Adding group to members that are missing it ...")
         batch = []
         for entry_dn in ldap_members:
+            log.debug("Processing entry '{entry_dn}'.", entry_dn=entry_dn)
             o = ldapsyntax.LDAPEntry(client, entry_dn)
+            log.debug("Fetching LDAP entry ...") 
             results = yield o.search(
                 filterText=None, 
                 attributes=[user_attribute], 
                 scope=pureldap.LDAP_SCOPE_baseObject) 
+            log.debug("Fetched results.") 
             if len(results) == 0:
                 log.warn("Could not find entry for '{dn}'.  Skipping.", dn=entry_dn)
                 continue
@@ -374,14 +398,17 @@ class LDAPProvisioner(object):
                 continue
             entry = results[0]
             groups = set([m.lower() for m in entry[user_attribute]])
+            orig_group_size = len(groups)
             groups.add(group_dn)
             groups = list(groups)
             groups.sort()
             entry[user_attribute] = groups
+            new_group_size = len(groups)
             log.debug(
-                "Scheduling entry '{entry_dn}' to have memberships: {groups}",
+                "Scheduling entry '{entry_dn}' to have memberships. Group count went from {old_count} => {new_count}.",
                 entry_dn=entry_dn,
-                groups=groups)
+                old_count=orig_group_size,
+                new_count=new_group_size)
             batch.append(entry.commit())
             if len(batch) >= subject_chunk_size:
                 log.debug("Committing scheduled batch ...")
@@ -635,15 +662,23 @@ class LDAPProvisioner(object):
         Transforms subjects to LDAP DNs.
         Returns a Deferred that fires with the LDAP DNs.
         """
+        log = self.log
+        log.debug("Transforming subjects to members ...")
         results = []
         subject_id_attribute = self.subject_id_attribute
         chunk_size = self.subject_chunk_size
         q = list(subjects)
+        log.debug("{q_size} subjects to transform.", q_size=len(q))
         while len(q) > 0:
             chunk = q[:chunk_size]
             q = q[chunk_size:]
+            log.debug(
+                "Transforming {chunk_size} subjects, {q_size} remaining.",
+                chunk_size=chunk_size,
+                q_size=len(q))
             lst =  yield self.load_subjects(set(chunk), client, attribs=[subject_id_attribute])
             results.extend(lst)
+            log.debug("{result_count} results have been accumulated.", result_count=len(results))
         fq_subjects = set(str(x[1].dn).lower() for x in results)
         returnValue(fq_subjects)
 
@@ -673,12 +708,16 @@ class LDAPProvisioner(object):
         empty_dn = config.get("empty_dn", None)
         group_attrib_type = self.group_attrib_type
         chunk_size = self.subject_chunk_size
+        log.debug("Transforming subject additions to LDAP members.")
         fq_adds = yield self.xform_subjects_to_members(adds, client)
         if deletes is not None:
+            log.debug("Transforming subject deletions to LDAP members.")
             fq_deletes = yield self.xform_subjects_to_members(deletes, client)
         else:
             fq_deletes = set([])
+        log.debug("Looking up LDAP group ...")
         group_entry = yield self.lookup_group(target.group, client) 
+        log.debug("Looked up LDAP group.")
         needs_create = False
         if group_entry is None:
             if target.create_group:
@@ -706,6 +745,7 @@ class LDAPProvisioner(object):
         members.sort()
         if provision_group:
             if needs_create:
+                log.debug("Creating LDAP group ...")
                 o = ldapsyntax.LDAPEntry(client, target.create_context)
                 attribs = {
                     'objectClass': ['top', 'groupOfNames'],
@@ -720,6 +760,7 @@ class LDAPProvisioner(object):
                         rdn=str(rdn),
                         ldap_context=target.create_context)
                     raise
+            log.debug("Modifying LDAP group.")
             try:
                 group_entry[group_attribute] = members
                 yield group_entry.commit()
@@ -729,6 +770,7 @@ class LDAPProvisioner(object):
                     event_type='ldap_error',
                     dn=str(group_entry.dn)) 
                 raise
+            log.debug("LDAP group modified.")
         returnValue((normalize_dn(group_entry.dn), members))
        
     @inlineCallbacks 
@@ -966,6 +1008,9 @@ def escape_filter_chars(assertion_value,escape_mode=0):
     return s
 
 def normalize_dn(dn):
+    """
+    Transforms a `DistinguishedName` into a `DistinguishedName` with the casing normalized.
+    """
     return DistinguishedName(tuple(RelativeDistinguishedName(str(r).lower()) for r in dn.listOfRDNs))
 
 @inlineCallbacks            
