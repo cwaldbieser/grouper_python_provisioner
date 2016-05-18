@@ -272,8 +272,7 @@ class LDAPProvisioner(object):
 
     @inlineCallbacks
     def perform_membership_sync(self, group, subjects):
-        if False:
-            yield None
+        log = self.log
         delay_time = 10
         while self.provisioner_state != self.IDLE:
             yield delay(self.reactor, delay_time)
@@ -284,7 +283,7 @@ class LDAPProvisioner(object):
             target = self.group_to_ldap_group(group)
             client = yield self.get_ldap_client()
             try:
-                group_dn, members = yield apply_changes_to_ldap_group(
+                group_dn, members = yield self.apply_changes_to_ldap_group(
                     target=target, adds=subjects, deletes=None, client=client)
                 yield self.sync_members_to_ldap_group(client, str(group_dn), members)
             finally:
@@ -302,6 +301,7 @@ class LDAPProvisioner(object):
         Add the membership to entries that do appear in `ldap_members`.
         """
         provision_user = self.provision_user
+        log = self.log
         if not provision_user:
             returnValue(None)
         user_attribute = self.user_attribute
@@ -311,6 +311,10 @@ class LDAPProvisioner(object):
         template_string = "({0}={1})".format(user_attribute, "{0}")
         fltr = template_string.format(escape_filter_chars(group_dn))
         o = ldapsyntax.LDAPEntry(client, base_dn)
+        log.debug("Searching LDAP with base='{ldap_base}', filter='{ldap_filter}', attributes={ldap_attributes}",
+            ldap_base=base_dn,
+            ldap_filter=fltr,
+            ldap_attributes=[user_attribute])
         try:
             results = yield o.search(filterText=fltr, attributes=[user_attribute]) 
         except Exception as ex:
@@ -332,31 +336,61 @@ class LDAPProvisioner(object):
                 groups = list(groups)
                 groups.sort()
                 entry[user_attribute] = groups
+                log.debug(
+                    "Scheduling entry '{entry_dn}' to have memberships: {groups}",
+                    entry_dn=entry_dn,
+                    groups=groups)
                 batch.append(entry.commit())
                 if len(batch) >= subject_chunk_size:
+                    log.debug("Committing scheduled batch ...")
                     yield gatherResults(batch)            
                     batch = []
             else:
-                processed.add(entry_dn)
+                processed.add(str(normalize_dn(entry_dn)))
         if len(batch) > 0:
+            log.debug("Committing scheduled batch ...")
             yield gatherResults(batch)            
         # Finally, update all the subject entries that ought to be one the list
         # but weren't.
+        log.debug(
+            "Already processed subjects => {processed}",
+            processed=processed)
         ldap_members = set(ldap_members) - processed
+        log.debug(
+            "Members to process => {ldap_members}",
+            ldap_members=ldap_members)
         batch = []
         for entry_dn in ldap_members:
             o = ldapsyntax.LDAPEntry(client, entry_dn)
+            results = yield o.search(
+                filterText=None, 
+                attributes=[user_attribute], 
+                scope=pureldap.LDAP_SCOPE_baseObject) 
+            if len(results) == 0:
+                log.warn("Could not find entry for '{dn}'.  Skipping.", dn=entry_dn)
+                continue
+            elif len(results) > 1:
+                log.warn("Found multiple entries for '{dn}'.  Skipping.", dn=entry_dn)
+                continue
+            entry = results[0]
             groups = set([m.lower() for m in entry[user_attribute]])
             groups.add(group_dn)
             groups = list(groups)
             groups.sort()
             entry[user_attribute] = groups
+            log.debug(
+                "Scheduling entry '{entry_dn}' to have memberships: {groups}",
+                entry_dn=entry_dn,
+                groups=groups)
             batch.append(entry.commit())
             if len(batch) >= subject_chunk_size:
+                log.debug("Committing scheduled batch ...")
                 yield gatherResults(batch)            
                 batch = []
         if len(batch) > 0:
+            log.debug("Committing scheduled batch ...")
             yield gatherResults(batch)            
+        log.debug("LDAP sync complete.")
 
     @inlineCallbacks
     def process_requests(self):
@@ -433,6 +467,7 @@ class LDAPProvisioner(object):
         """
         Returns a Deferred that fires with an asynchronous LDAP client.
         """
+        log = self.log
         config = self.config
         base_dn = config['base_dn']
         start_tls = self.start_tls
@@ -444,6 +479,11 @@ class LDAPProvisioner(object):
         overrides = {base_dn: (ldap_host, ldap_port)}
         client = yield c.connect(base_dn, overrides=overrides)
         try:
+            log.debug(
+                "LDAP client connected to server: host={ldap_host}, port={ldap_port}",
+                event_type='ldap_connect',
+                ldap_host=ldap_host,
+                ldap_port=ldap_port)
             if start_tls:
                 yield client.startTLS()
                 log.debug("LDAP client initiated StartTLS.", event_type='ldap_starttls')
@@ -467,11 +507,6 @@ class LDAPProvisioner(object):
         yield self.transfer_intake_to_batch()
         # Process the normalized batch.
         client = yield self.get_ldap_client()
-        log.debug(
-            "LDAP client connected to server: host={ldap_host}, port={ldap_port}",
-            event_type='ldap_connect',
-            ldap_host=ldap_host,
-            ldap_port=ldap_port)
         try:
             group_sql = "SELECT rowid, grp FROM groups ORDER BY grp ASC;"
             memb_add_sql = "SELECT member FROM member_ops WHERE grp = ? AND op = ? ORDER BY member ASC;" 
@@ -638,9 +673,9 @@ class LDAPProvisioner(object):
         empty_dn = config.get("empty_dn", None)
         group_attrib_type = self.group_attrib_type
         chunk_size = self.subject_chunk_size
-        fq_adds = self.xform_subjects_to_members(adds, client)
+        fq_adds = yield self.xform_subjects_to_members(adds, client)
         if deletes is not None:
-            fq_deletes = self.xform_subjects_to_members(deletes, client)
+            fq_deletes = yield self.xform_subjects_to_members(deletes, client)
         else:
             fq_deletes = set([])
         group_entry = yield self.lookup_group(target.group, client) 
