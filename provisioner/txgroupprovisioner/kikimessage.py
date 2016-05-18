@@ -126,7 +126,7 @@ class BasicFullSyncMsg(BaseMsg):
     list for a group and perform whatever changes are necessary to mirror that
     membership in their provisioning targets.
     """
-    action = MEMBERSHIP_FULL_SYNC
+    action = constants.ACTION_MEMBERSHIP_SYNC
 
     def __init__(self, group, subjects):
         self.group = group
