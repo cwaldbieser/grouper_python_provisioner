@@ -370,7 +370,7 @@ class LDAPProvisioner(object):
         base_dn = self.base_dn
         log.debug("base_dn='{base_dn}', commit_batch_size={commit_batch_size}",
             base_dn=base_dn,
-            subject_chunk_size=subject_chunk_size)
+            commit_batch_size=commit_batch_size)
         # Fetch all entries that are members of the group DN.
         template_string = "({0}={1})".format(user_attribute, "{0}")
         fltr = template_string.format(escape_filter_chars(group_dn))
