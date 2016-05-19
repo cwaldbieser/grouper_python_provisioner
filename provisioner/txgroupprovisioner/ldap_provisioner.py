@@ -54,7 +54,8 @@ class LDAPProvisioner(object):
     batch_time = 10
     subject_id_attribute = 'uid'
     group_attrib_type = 'cn'
-    subject_chunk_size = 15
+    subject_chunk_size = 500
+    commit_batch_size = 50
     provision_user = 0
     provision_group = 0
     provisioner_state = None
@@ -294,6 +295,9 @@ class LDAPProvisioner(object):
                     target=target, adds=subjects, deletes=None, client=client)
                 log.debug("Applying changes to LDAP members ...")
                 yield self.sync_members_to_ldap_group(client, str(group_dn), members)
+            except Exception as ex:
+                log.error("Fatal error:\n{error}", error=ex)
+                raise
             finally:
                 if client.connected:
                     client.unbind()
@@ -301,6 +305,51 @@ class LDAPProvisioner(object):
         finally:
             self.provisioner_state = self.IDLE
             log.debug("Provisioner state set back to IDLE.")
+
+    @inlineCallbacks
+    def alter_ldap_membership(self, client, entry_dn, group_dn, delete=True):
+        """
+        Load the membership attribute for `entry`, add/remove the `group_dn`
+        value, and save the entry.
+        """
+        log = self.log
+        user_attribute = self.user_attribute
+        entry = ldapsyntax.LDAPEntry(client, entry_dn)
+        yield entry.fetch(user_attribute)
+        groups = set([m.lower() for m in entry.get(user_attribute, [])])
+        orig_group_size = len(groups)
+        if delete:
+            groups.discard(group_dn)
+        else:
+            groups.add(group_dn)
+        groups = list(groups)
+        groups.sort()
+        new_group_size = len(groups)
+        entry[user_attribute] = groups
+        log.debug(
+            "'{entry_dn}' group count went from {old_count} => {new_count}",
+            entry_dn=entry_dn,
+            old_count=orig_group_size,
+            new_count=new_group_size)
+        try:
+            yield entry.commit()
+        except Exception as ex:
+            log.failure(
+                "Error altering LDAP membership for entry {entry_dn}",
+                entry_dn=entry_dn)
+            raise
+        returnValue(True)
+
+    def check_results(self, result_list, entry_indicies):
+        """
+        Test the results in `result_list`.
+        Return a list of the entry indicies for which the results indicate
+        a failure.
+        """
+        failures = [entry_indicies[n]
+            for n, result in enumerate(result_list)
+                if not result]
+        return failures
 
     @inlineCallbacks
     def sync_members_to_ldap_group(self, client, group_dn, ldap_members):
@@ -317,106 +366,102 @@ class LDAPProvisioner(object):
             returnValue(None)
         user_attribute = self.user_attribute
         subject_chunk_size = self.subject_chunk_size
+        commit_batch_size = self.commit_batch_size
         base_dn = self.base_dn
+        log.debug("base_dn='{base_dn}', commit_batch_size={commit_batch_size}",
+            base_dn=base_dn,
+            subject_chunk_size=subject_chunk_size)
         # Fetch all entries that are members of the group DN.
         template_string = "({0}={1})".format(user_attribute, "{0}")
         fltr = template_string.format(escape_filter_chars(group_dn))
         o = ldapsyntax.LDAPEntry(client, base_dn)
-        log.debug("Searching LDAP with base='{ldap_base}', filter='{ldap_filter}', attributes={ldap_attributes}",
+        log.debug("Searching LDAP with base='{ldap_base}', filter='{ldap_filter}'",
             ldap_base=base_dn,
             ldap_filter=fltr,
-            ldap_attributes=[user_attribute])
+            ldap_attributes=None)
         try:
-            results = yield o.search(filterText=fltr, attributes=[user_attribute]) 
+            results = yield o.search(filterText=fltr, attributes=None) 
         except Exception as ex:
             log.error(
                 "Error while searching for LDAP entries with {user_attribute}={group_dn}",
                 user_attribute=user_attribute,
                 group_dn=group_dn) 
             raise
-        log.debug("LDAP account entries have been retrieved.")
+        log.debug("{result_count} LDAP account entries have been retrieved.",
+            result_count=len(results))
         # Remove the group from entries that aren't on the subject list.
         # If an entry is on the list, keep track of it so we don't need to
         # update it later.
         log.debug("Removing group DN from entries that are not in the subject list ...")
         batch = []
+        entry_indices = []
         processed = set([])
-        for entry in results: 
-            entry_dn = normalize_dn(entry.dn)
-            log.debug("Processing entry '{entry_dn}'.", entry_dn=entry_dn)
-            if entry_dn not in ldap_members:
-                groups = set([m.lower() for m in entry[user_attribute]])
-                orig_group_size = len(groups)
-                groups = groups - set([group_dn])
-                groups = list(groups)
-                groups.sort()
-                new_group_size = len(groups)
-                entry[user_attribute] = groups
-                log.debug(
-                    "Scheduling entry '{entry_dn}' to have new memberships. Group count went from {old_count} => {new_count}",
-                    entry_dn=entry_dn,
-                    old_count=orig_group_size,
-                    new_count=new_group_size)
-                batch.append(entry.commit())
-                if len(batch) >= subject_chunk_size:
+        for n, entry in enumerate(results): 
+            entry_dn = str(entry.dn).lower()
+            log.debug("Processing entry number {n}, '{entry_dn}'.", n=n, entry_dn=entry_dn)
+            if not (entry_dn in ldap_members):
+                log.debug("Scheduling entry to have group DN removed ...") 
+                batch.append(
+                    self.alter_ldap_membership(
+                        client, entry_dn, group_dn, delete=True))
+                entry_indices.append(n)
+                if len(batch) >= commit_batch_size:
                     log.debug("Committing scheduled batch ...")
-                    yield gatherResults(batch)            
+                    commits = yield gatherResults(batch, consumeErrors=True)
+                    failed = self.check_results(commits, entry_indicies)
+                    if len(failed) > 0:
+                        log.error("Batch update failed for the following entries: {failed}",
+                            failed=failed)
                     log.debug("Committed batch.")
                     batch = []
+                    entry_indices = []
             else:
                 log.debug("Entry belongs in group.")
                 processed.add(str(entry_dn))
+        log.debug("Checkpoint A")
         if len(batch) > 0:
             log.debug("Committing scheduled batch ...")
-            yield gatherResults(batch)            
+            commits = yield gatherResults(batch, consumeErrors=False)
+            failed = self.check_results(commits, entry_indicies)
+            if len(failed) > 0:
+                log.error("Batch update failed for the following entries: {failed}",
+                    failed=failed)
             log.debug("Committed batch.")
         # Finally, update all the subject entries that ought to be one the list
         # but weren't.
         log.debug(
-            "Already processed subjects => {processed}",
-            processed=processed)
+            "Count of already processed subjects => {processed_count}",
+            processed_count=len(processed))
         ldap_members = set(ldap_members) - processed
         log.debug(
-            "Members to process => {ldap_members}",
-            ldap_members=ldap_members)
+            "Count of members to process => {count}",
+            count=len(ldap_members))
         log.debug("Adding group to members that are missing it ...")
         batch = []
-        for entry_dn in ldap_members:
-            log.debug("Processing entry '{entry_dn}'.", entry_dn=entry_dn)
+        entry_indicies = []
+        for n, entry_dn in enumerate(ldap_members):
+            log.debug("Processing entry number {n}, '{entry_dn}'.", n=n, entry_dn=entry_dn)
             o = ldapsyntax.LDAPEntry(client, entry_dn)
-            log.debug("Fetching LDAP entry ...") 
-            results = yield o.search(
-                filterText=None, 
-                attributes=[user_attribute], 
-                scope=pureldap.LDAP_SCOPE_baseObject) 
-            log.debug("Fetched results.") 
-            if len(results) == 0:
-                log.warn("Could not find entry for '{dn}'.  Skipping.", dn=entry_dn)
-                continue
-            elif len(results) > 1:
-                log.warn("Found multiple entries for '{dn}'.  Skipping.", dn=entry_dn)
-                continue
-            entry = results[0]
-            groups = set([m.lower() for m in entry[user_attribute]])
-            orig_group_size = len(groups)
-            groups.add(group_dn)
-            groups = list(groups)
-            groups.sort()
-            entry[user_attribute] = groups
-            new_group_size = len(groups)
-            log.debug(
-                "Scheduling entry '{entry_dn}' to have memberships. Group count went from {old_count} => {new_count}.",
-                entry_dn=entry_dn,
-                old_count=orig_group_size,
-                new_count=new_group_size)
-            batch.append(entry.commit())
-            if len(batch) >= subject_chunk_size:
+            log.debug("Scheduling entry to have group DN added ...") 
+            batch.append(
+                self.alter_ldap_membership(
+                    client, entry_dn, group_dn, delete=False))
+            entry_indicies.append(n)
+            if len(batch) >= commit_batch_size:
                 log.debug("Committing scheduled batch ...")
-                yield gatherResults(batch)            
+                commits = yield gatherResults(batch, consumeErrors=False)            
+                failed = self.check_results(commits, entry_indicies)
+                if len(failed) > 0:
+                    log.error("Batch update failed for the following entries: {failed}",
+                        failed=failed)
                 batch = []
         if len(batch) > 0:
             log.debug("Committing scheduled batch ...")
-            yield gatherResults(batch)            
+            commits = yield gatherResults(batch)            
+            failed = self.check_results(commits, entry_indicies)
+            if len(failed) > 0:
+                log.error("Batch update failed for the following entries: {failed}",
+                    failed=failed)
         log.debug("LDAP sync complete.")
 
     @inlineCallbacks
@@ -676,7 +721,7 @@ class LDAPProvisioner(object):
                 "Transforming {chunk_size} subjects, {q_size} remaining.",
                 chunk_size=chunk_size,
                 q_size=len(q))
-            lst =  yield self.load_subjects(set(chunk), client, attribs=[subject_id_attribute])
+            lst =  yield self.load_subjects(set(chunk), client, attribs=None)
             results.extend(lst)
             log.debug("{result_count} results have been accumulated.", result_count=len(results))
         fq_subjects = set(str(x[1].dn).lower() for x in results)
@@ -968,11 +1013,11 @@ class LDAPProvisioner(object):
                 stem_map[group] = props
             self.group_map = direct_map
             self.stem_map = stem_map
-            log.debug(
-                "Created group maps: group_map={group_map!r} stem_map={stem_map!r}",
-                event_type='groupmap_parsed',
-                group_map=direct_map,
-                stem_map=stem_map)
+        log.debug(
+            "Created group maps: group_map={group_map!r} stem_map={stem_map!r}",
+            event_type='groupmap_parsed',
+            group_map=direct_map,
+            stem_map=stem_map)
         
 def escape_filter_chars(assertion_value,escape_mode=0):
     """
