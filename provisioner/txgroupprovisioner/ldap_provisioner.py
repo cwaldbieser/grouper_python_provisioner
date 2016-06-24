@@ -1023,7 +1023,10 @@ class LDAPProvisioner(object):
             is_folder = group.endswith(":")
             if not is_folder:
                 if isinstance(value, basestring):
-                    direct_map[group] = {'group': value, 'create_group': False}
+                    direct_map[group] = {
+                        'group': value, 
+                        'create_group': False, 
+                        'create_posix_group': False}
                 elif isinstance(value, Mapping):
                     if not 'group' in value:
                         log.warn(
