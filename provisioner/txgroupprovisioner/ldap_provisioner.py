@@ -754,7 +754,7 @@ class LDAPProvisioner(object):
             q = q[chunk_size:]
             log.debug(
                 "Transforming {chunk_size} subjects, {q_size} remaining.",
-                chunk_size=chunk_size,
+                chunk_size=len(chunk),
                 q_size=len(q))
             lst =  yield self.load_subjects(set(chunk), client, attribs=None)
             results.extend(lst)
@@ -787,7 +787,6 @@ class LDAPProvisioner(object):
         """
         log = self.log
         config = self.config
-        group_attribute = self.group_attribute
         provision_group = self.provision_group
         empty_dn = config.get("empty_dn", None)
         group_attrib_type = self.group_attrib_type
@@ -814,6 +813,7 @@ class LDAPProvisioner(object):
                 fq_deletes = yield self.xform_subjects_to_members(deletes, client)
             else:
                 fq_deletes = set([])
+            group_attribute = "member"
         elif group_type == 'posixGroup':
             fq_adds = set(subject.lower() for subject in adds)
             if deletes is not None:
@@ -957,12 +957,12 @@ class LDAPProvisioner(object):
     def lookup_group(self, group_name, client):
         group_attrib_type = self.group_attrib_type
         base_dn = self.base_dn
-        group_attrib = self.group_attribute
+        group_attribs = ['member', 'memberUid', 'objectClass']
         fltr = "({0}={1})".format(group_attrib_type, escape_filter_chars(group_name))
         o = ldapsyntax.LDAPEntry(client, base_dn)
         try:
             results = yield o.search(
-                filterText=fltr, attributes=[group_attrib, 'objectClass']) 
+                filterText=fltr, attributes=group_attribs) 
         except Exception as ex:
             self.log.error(
                 "Error while searching for LDAP group: {group}",
