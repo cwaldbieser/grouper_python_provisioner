@@ -26,6 +26,7 @@ from edu.internet2.middleware.grouper.app.loader.db import Hib3GrouperLoaderLog
 from edu.internet2.middleware.grouper.app.loader import GrouperLoaderStatus
 from edu.internet2.middleware.grouper.app.loader import GrouperLoader      
 from edu.internet2.middleware.grouper.app.loader import GrouperLoaderType
+from com.rabbitmq.client import AlreadyClosedException
 from com.rabbitmq.client import ConnectionFactory              
 from com.rabbitmq.client import Connection       
 from com.rabbitmq.client import Channel                        
@@ -33,6 +34,7 @@ from com.rabbitmq.client import QueueingConsumer
 from java.io import FileInputStream
 from java.lang import String                         
 from java.lang import Boolean
+from java.net import SocketException
 from java.security import KeyStore
 from javax.net.ssl import SSLContext, TrustManagerFactory
 
@@ -247,7 +249,7 @@ def main(args):
                     warn("Could not send message.\n%s\n" % str(ex))
                     time.sleep(10)
                     continue
-                except (java.net.SocketException, com.rabbitmq.client.AlreadyClosedException), ex:
+                except (SocketException, AlreadyClosedException), ex:
                     while True:
                         time.sleep(20)
                         # Try to reconnect.
