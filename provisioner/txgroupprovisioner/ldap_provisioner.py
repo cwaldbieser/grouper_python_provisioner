@@ -356,13 +356,13 @@ class LDAPProvisioner(object):
             raise
         returnValue(True)
 
-    def check_results(self, result_list, entry_indicies):
+    def check_results(self, result_list, entry_indices):
         """
         Test the results in `result_list`.
         Return a list of the entry indicies for which the results indicate
         a failure.
         """
-        failures = [entry_indicies[n]
+        failures = [entry_indices[n]
             for n, result in enumerate(result_list)
                 if not result]
         return failures
@@ -439,7 +439,7 @@ class LDAPProvisioner(object):
                 if len(batch) >= commit_batch_size:
                     log.debug("Committing scheduled batch ...")
                     commits = yield gatherResults(batch, consumeErrors=True)
-                    failed = self.check_results(commits, entry_indicies)
+                    failed = self.check_results(commits, entry_indices)
                     if len(failed) > 0:
                         log.error("Batch update failed for the following entries: {failed}",
                             failed=failed)
@@ -452,7 +452,7 @@ class LDAPProvisioner(object):
         if len(batch) > 0:
             log.debug("Committing scheduled batch ...")
             commits = yield gatherResults(batch, consumeErrors=False)
-            failed = self.check_results(commits, entry_indicies)
+            failed = self.check_results(commits, entry_indices)
             if len(failed) > 0:
                 log.error("Batch update failed for the following entries: {failed}",
                     failed=failed)
@@ -471,7 +471,7 @@ class LDAPProvisioner(object):
             count=len(ldap_member_dns))
         log.debug("Adding group to members that are missing it ...")
         batch = []
-        entry_indicies = []
+        entry_indices = []
         for n, entry_dn in enumerate(ldap_member_dns):
             log.debug("Processing entry number {n}, '{entry_dn}'.", n=n, entry_dn=entry_dn)
             o = ldapsyntax.LDAPEntry(client, entry_dn)
@@ -479,11 +479,11 @@ class LDAPProvisioner(object):
             batch.append(
                 self.alter_ldap_membership(
                     client, entry_dn, group_dn, delete=False))
-            entry_indicies.append(n)
+            entry_indices.append(n)
             if len(batch) >= commit_batch_size:
                 log.debug("Committing scheduled batch ...")
                 commits = yield gatherResults(batch, consumeErrors=False)            
-                failed = self.check_results(commits, entry_indicies)
+                failed = self.check_results(commits, entry_indices)
                 if len(failed) > 0:
                     log.error("Batch update failed for the following entries: {failed}",
                         failed=failed)
@@ -491,7 +491,7 @@ class LDAPProvisioner(object):
         if len(batch) > 0:
             log.debug("Committing scheduled batch ...")
             commits = yield gatherResults(batch)            
-            failed = self.check_results(commits, entry_indicies)
+            failed = self.check_results(commits, entry_indices)
             if len(failed) > 0:
                 log.error("Batch update failed for the following entries: {failed}",
                     failed=failed)
