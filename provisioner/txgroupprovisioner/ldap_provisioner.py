@@ -17,6 +17,7 @@ from ldaptor.protocols import pureldap
 from ldaptor.protocols.ldap import ldapclient, ldapsyntax, ldapconnector
 from ldaptor.protocols.ldap.distinguishedname import DistinguishedName, RelativeDistinguishedName
 from ldaptor.protocols.ldap.distinguishedname import unescape as unescapeDN
+from ldaptor.protocols.ldap import ldaperrors
 from twisted.plugin import IPlugin
 from zope.interface import implements
 from twisted.enterprise import adbapi
@@ -331,7 +332,10 @@ class LDAPProvisioner(object):
         log = self.log
         user_attribute = self.user_attribute
         entry = ldapsyntax.LDAPEntry(client, entry_dn)
-        yield entry.fetch(user_attribute)
+        try:
+            yield entry.fetch(user_attribute)
+        except ldaperrors.LDAPNoSuchObject:
+            returnValue(True)
         groups = set([m.lower() for m in entry.get(user_attribute, [])])
         orig_group_size = len(groups)
         if delete:
