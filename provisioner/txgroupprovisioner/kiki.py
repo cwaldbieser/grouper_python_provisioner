@@ -369,7 +369,7 @@ def delay(reactor, seconds):
     """
     A Deferred that fires after `seconds` seconds.
     """
-    yield task.deferLater(reactor, seconds, lambda x: None)
+    yield task.deferLater(reactor, seconds, lambda : None)
 
 def get_config_opt(config, section, opt):
     """
