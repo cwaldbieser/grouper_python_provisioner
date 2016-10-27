@@ -35,11 +35,85 @@ from utils import get_plugin_factory
 
 ParsedMessage = namedtuple(
     'ParsedMessage', 
-    ["action", "subject"])
+    ["action", "group", "subject"])
+
+
+ParseSyncMessage = namedtuple(
+    'ParsedSyncMessage',
+    ["action", "group", "subjects"])
 
 
 class UnknowActionError(Exception):
     pass
+
+
+class AnchorProtocol(Protocol):
+    """
+    Protocol used by the "anchor" ssh connection, which is usually just some
+    kind of shell.  It stays connected to the remote host and additional
+    channels are opened on its connection in order to execute programs on
+    the remote host.
+    """
+
+    reactor = None
+    log = None
+
+    def __init__(self):
+        self.connected = defer.Deferred()
+        self.finished = defer.Deferred()
+
+    def connectionMade(self):
+        """
+        Fires when the initial connection is made.
+        """
+        log.info("Connected to target host.")
+        self.connected.callback()
+
+    def dataReceived(self, data):
+        pass
+
+    def connectionLost(self, reason):
+        """
+        Fires if the connection to the remote host is lost.
+        This event fires even if the dropped connection was self-initiated.
+        """
+        log.info("Connection to target host lost.")
+        self.finished.callback(reason)
+
+
+class CommandProtocol(Protocol):
+    """
+    Protocol used to issue a remote command and receive responses.
+    """
+
+    reactor = None
+    log = None
+    data_callback = None
+
+    def __init__(self):
+        self.connected = defer.Deferred()
+        self.finished = defer.Deferred()
+
+    def connectionMade(self):
+        """
+        Fires when the initial connection is made.
+        """
+        log.debug("Opened new channel to target host.")
+        self.connected.callback(None)
+
+    def dataReceived(self, data):
+        cb = self.data_callback
+        if cb is not None:
+            cb(data)
+
+    def connectionLost(self, reason):
+        """
+        Fires if the connection to the remote host is lost.
+        This event fires even if the dropped connection was self-initiated.
+        """
+        log.debug("Closed channel to target host.")
+        self.finished.callback(None)
+
 
 
 class SSHProvisionerFactory(object):
@@ -60,6 +134,8 @@ class SSHProvisioner(object):
     service_state = None
     reactor = None
     log = None
+    connected_to_target = False
+    ssh_conn = None
 
     def load_config(self, config_file, default_log_level, logObserverFactory):
         """                                                             
@@ -118,6 +194,8 @@ class SSHProvisioner(object):
                 yield self.provision_subject(msg)
             elif msg.action == constants.ACTION_DELETE:
                 yield self.deprovision_subject(msg)
+            elif msg.action = constants.ACTION_MEMBERSHIP_SYNC:
+                yield self.sync_membership(msg)
             else:
                 raise UnknownActionError(
                     "Don't know how to handle action '{0}'.".format(msg.action))
@@ -138,9 +216,57 @@ class SSHProvisioner(object):
         serialized = msg.content.body
         doc = json.loads(serialized)
         action = doc['action']
-        subject = doc['subject']
-        attributes = None
-        return ParsedMessage(action, subject)
+        group = doc['group']
+        if action in (constants.ACTION_ADD, constants.ACTION_DELETE):
+            subject = doc['subject']
+            return ParsedMessage(action, group, subject)
+        elif action == constants.ACTION_MEMBERSHIP_SYNC:
+            subjects = doc["subjects"]
+            return ParsedSyncMessage(action, group, subjects)
+        else:
+            raise UnknownActionError(
+                "Don't know how to handle action '{0}'.".format(msg.action))
+
+    @inlineCallbacks
+    def connect_to_target(self):
+        """
+        Establish an SSH connection to the target host.
+        """
+        if self.connected_to_target:
+            returnValue(None)
+        known_hosts = self.get_known_hosts()
+        keys = self.get_keys()
+        command = b"/bin/bash"
+        endpoint = SSHCommandClientEndpoint.newConnection(
+            self.reactor,
+            command,
+            self.user,
+            self.host,
+            keys=keys,
+            knownHosts=known_hosts)
+        proto = AnchorProtocol()
+        proto.reactor = self.reactor
+        proto.connected.addCallback(self.set_connected)
+        proto.finished.addCallback(self.set_disconnected)
+        proto = yield connectProtocol(endpoint, proto)
+        self.ssh_conn = proto.transport.conn
+        returnValue(proto.connected)
+
+    def set_connected(self):
+        self.connected_to_target = True
+
+    def set_disconnected(self, reason):
+        self.connected_to_target = False    
+
+    def get_known_hosts(self):
+        """
+        """
+        pass
+
+    def get_keys(self):
+        """
+        """
+        pass
 
     @inlineCallbacks
     def provision_subject(self, msg):
@@ -149,8 +275,8 @@ class SSHProvisioner(object):
         """
         log = self.log
         log.debug(
-            "Attempting to provision subject '{subject}'.",
-            subject=msg.subject)
+            "Attempting to provision subject '{subject}' for group '{group}'.",
+            subject=msg.subject, group=msg.group)
         #TODO: Logic to provision subject goes here.
         yield self.todo()
         returnValue(None)
@@ -162,8 +288,21 @@ class SSHProvisioner(object):
         """
         log = self.log
         log.debug(
-            "Attempting to deprovision subject '{subject}'.",
-            subject=msg.subject)
+            "Attempting to deprovision subject '{subject}' from group '{group}'.",
+            subject=msg.subject, group=msg.group)
+        #TODO: Logic to de-provision subject goes here.
+        yield self.todo()
+        returnValue(None)
+
+    @inlineCallbacks
+    def sync_membership(self, msg):
+        """
+        Synchronize membership.
+        """
+        log = self.log
+        log.debug(
+            "Attempting to synchronize membership for group '{0}'.",
+            group=msg.group)
         #TODO: Logic to de-provision subject goes here.
         yield self.todo()
         returnValue(None)
