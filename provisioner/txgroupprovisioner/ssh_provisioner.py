@@ -32,6 +32,14 @@ from interface import (
 )
 from utils import get_plugin_factory
 
+def filter_shellquote(s):
+    """
+    Jinja2 template filter for quoting shell arguments.
+    """
+    if isinstance(s, jinja2.runtime.Undefined):
+        return ""
+    return "'" + s.replace("'", "'\\''") + "'"
+
 
 ParsedMessage = namedtuple(
     'ParsedMessage', 
@@ -50,7 +58,7 @@ class UnknowActionError(Exception):
 class AnchorProtocol(Protocol):
     """
     Protocol used by the "anchor" ssh connection, which is usually just some
-    kind of shell.  It stays connected to the remote host and additional
+    kind of blocking command.  It stays connected to the remote host and additional
     channels are opened on its connection in order to execute programs on
     the remote host.
     """
@@ -131,11 +139,26 @@ class SSHProvisionerFactory(object):
 
 class SSHProvisioner(object):
     implements(IProvisioner)
+    CMD_TYPE_SIMPLE = 0
+    CMD_TYPE_INPUT = 1
     service_state = None
     reactor = None
     log = None
     connected_to_target = False
     ssh_conn = None
+    anchor_cmd = b"/bin/cat"
+    provision_cmd = None
+    provision_cmd_type = CMD_TYPE_SIMPLE
+    provision_input = None
+    provision_ok_result = None
+    deprovision_cmd = None
+    deprovision_cmd_type = CMD_TYPE_SIMPLE
+    deprovision_input = None
+    deprovision_ok_result = None
+    sync_cmd = None
+    sync_cmd_type = CMD_TYPE_SIMPLE
+    sync_input = None
+    sync_ok_result = None
 
     def load_config(self, config_file, default_log_level, logObserverFactory):
         """                                                             
@@ -154,12 +177,40 @@ class SSHProvisioner(object):
             self.log = log
             log.info("Initializing SSH provisioner.",
                 event_type='init_provisioner')
+            # Initialize template environment.
+            self.template_env = jinja2.Environment(trim_blocks=True, lstrip_blocks=True)
+            self.template_env.filters['shellquote'] = shell_quote
             # Load SSH configuration info.
             try:
                 self.diagnostic_mode = bool(config.get("diagnostic_mode", False))
                 self.endpoint_s = config.get("endpoint", None)
-                self.add_memb_command = config["add_memb_command"]
-                self.remove_memb_command = config["remove_memb_command"]
+                self.provision_cmd = self.template_env.from_string(
+                    config["provision_cmd"].strip())
+                self.deprovision_cmd = self.template_env.from_string(
+                    config["deprovision_cmd"].strip())
+                template_str = config.get("sync_cmd", None)
+                if template_str is not None:
+                    self.sync_cmd = self.template_env.from_string(
+                        template_str.strip())
+                self.provision_cmd_type = self.parse_command_type(
+                    config.get("provision_cmd_type", "simple"))
+                self.deprovision_cmd_type = self.parse_command_type(
+                    config.get("deprovision_cmd_type", "simple"))
+                self.sync_cmd_type = self.parse_command_type(
+                    config.get("sync_cmd_type", "simple"))
+                self.provision_input = self.template_env.from_string(
+                    config["provision_input"].strip())
+                self.deprovision_input = self.template_env.from_string(
+                    config["deprovision_input"].strip())
+                template_str = config.get("sync_input", None)
+                if template_str is not None:
+                    self.sync_input = self.template_env.from_string(
+                        template_str.strip())
+                self.provision_ok_result = config["provision_ok_result"].strip()
+                self.deprovision_ok_result = config["deprovision_ok_result"].strip()
+                result = config.get("sync_ok_result", None)
+                if result is not None:
+                    self.sync_ok_result = result.strip()
                 # known hosts path
                 # ssh-agent endpoint
                 # keys; passwords (optional)
@@ -177,6 +228,15 @@ class SSHProvisioner(object):
             log.failure("Provisioner failed to initialize: {0}".format(ex))
             raise
         return defer.succeed(None)
+
+    def parse_command_type(self, t):
+        s = t.lower().strip()
+        if s == "simple":
+            return self.CMD_TYPE_SIMPLE
+        elif s == "input":
+            return self.CMD_TYPE_INPUT
+        else:
+            raise Exception("Unknown command type '{0}'.".format(t))
 
     @inlineCallbacks                                                   
     def provision(self, amqp_message):             
@@ -236,7 +296,7 @@ class SSHProvisioner(object):
             returnValue(None)
         known_hosts = self.get_known_hosts()
         keys = self.get_keys()
-        command = b"/bin/bash"
+        command = self.anchor_cmd
         endpoint = SSHCommandClientEndpoint.newConnection(
             self.reactor,
             command,
@@ -250,7 +310,9 @@ class SSHProvisioner(object):
         proto.finished.addCallback(self.set_disconnected)
         proto = yield connectProtocol(endpoint, proto)
         self.ssh_conn = proto.transport.conn
-        returnValue(proto.connected)
+        yield proto.connected
+        self.set_connected()
+        returnValue(None)
 
     def set_connected(self):
         self.connected_to_target = True
@@ -269,6 +331,21 @@ class SSHProvisioner(object):
         pass
 
     @inlineCallbacks
+    def create_command_channel(self, cmd):
+        """
+        Create an SSH channel over the existing connection and issue a command.
+        Return the `CommandProtocol` instance.
+        """
+        if not self.connected_to_target:
+            raise Exception("Tried to open channel, but was not connected to the target host.")
+        ssh_conn = self.ssh_conn
+        endpoint = SSHCommandClientEndpoint.existingConnection(
+            conn,
+            cmd)
+        proto = yield endpoint.connect(factory)
+        returnValue(proto)
+
+    @inlineCallbacks
     def provision_subject(self, msg):
         """
         Provision a subject.
@@ -277,8 +354,28 @@ class SSHProvisioner(object):
         log.debug(
             "Attempting to provision subject '{subject}' for group '{group}'.",
             subject=msg.subject, group=msg.group)
-        #TODO: Logic to provision subject goes here.
-        yield self.todo()
+        yield self.connect_to_target()
+        command = self.provision_cmd
+        command_type = self.provision_cmd_type
+        # Evaluate command template
+        command = self.provision_cmd.render(
+            subject=msg.subject, 
+            group=msg.group)
+        command = command.encode('utf-8')
+        # Create channel with command.
+        cmd_protocol = yield self.create_command_channel()
+        transport = cmd_protocol.transport
+        ssh_conn = transport.conn
+        if command_type == self.CMD_TYPE_INPUT:
+            # Evaluate input template
+            data = self.provision_input.render(
+                subject=msg.subject,
+                group=msg.group)
+            # Write input to channel.
+            cmd_protocol.transport.write(data)
+        # Send EOF
+        ssh_conn.sendEOF(transport)
+        # Evaluate response.
         returnValue(None)
 
     @inlineCallbacks
