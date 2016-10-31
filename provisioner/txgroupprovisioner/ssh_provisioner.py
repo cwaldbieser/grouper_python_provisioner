@@ -5,11 +5,14 @@ import datetime
 import json
 import commentjson
 import jinja2 
+import os.path
+import struct
 from textwrap import dedent
+import types
 from twisted.conch.client.knownhosts import KnownHostsFile
 from twisted.conch.endpoints import SSHCommandClientEndpoint
 from twisted.conch.ssh.keys import EncryptedKeyError, Key
-from twisted.internet import defer
+from twisted.internet import defer, error
 from twisted.internet.defer import (
     inlineCallbacks, 
     returnValue,
@@ -40,13 +43,33 @@ def filter_shellquote(s):
         return ""
     return "'" + s.replace("'", "'\\''") + "'"
 
+def filter_newline(s):
+    """
+    Jinja2 template filter adds a newline to the end of a string.
+    """
+    if isinstance(s, jinja2.runtime.Undefined):
+        return "\n"
+    return "{0}\n".format(s)
+
+def patch_channel(proto):
+    """
+    Patches a Protocol instance's channel (transport) so that the exit status
+    is actually recorded on the Protocol instance.
+    This monkeypatching is intended to work with SSH client protocols.
+    """
+
+    def request_exit_status(self, data):
+        proto.exit_status = int(struct.unpack('>L', data)[0])
+
+    proto.transport.request_exit_status = types.MethodType(request_exit_status, proto.transport)
+
 
 ParsedMessage = namedtuple(
     'ParsedMessage', 
     ["action", "group", "subject"])
 
 
-ParseSyncMessage = namedtuple(
+ParsedSyncMessage = namedtuple(
     'ParsedSyncMessage',
     ["action", "group", "subjects"])
 
@@ -67,15 +90,15 @@ class AnchorProtocol(Protocol):
     log = None
 
     def __init__(self):
-        self.connected = defer.Deferred()
+        self.connected_future = defer.Deferred()
         self.finished = defer.Deferred()
 
     def connectionMade(self):
         """
         Fires when the initial connection is made.
         """
-        log.info("Connected to target host.")
-        self.connected.callback()
+        self.log.info("Connected to target host.")
+        self.connected_future.callback(None)
 
     def dataReceived(self, data):
         pass
@@ -97,17 +120,18 @@ class CommandProtocol(Protocol):
     reactor = None
     log = None
     data_callback = None
+    exit_status = None
 
     def __init__(self):
-        self.connected = defer.Deferred()
+        self.connected_future = defer.Deferred()
         self.finished = defer.Deferred()
 
     def connectionMade(self):
         """
         Fires when the initial connection is made.
         """
-        log.debug("Opened new channel to target host.")
-        self.connected.callback(None)
+        self.log.debug("Opened new channel to target host.")
+        self.connected_future.callback(None)
 
     def dataReceived(self, data):
         cb = self.data_callback
@@ -119,7 +143,7 @@ class CommandProtocol(Protocol):
         Fires if the connection to the remote host is lost.
         This event fires even if the dropped connection was self-initiated.
         """
-        log.debug("Closed channel to target host.")
+        self.log.debug("Closed channel to target host.")
         self.finished.callback(None)
 
 
@@ -159,6 +183,12 @@ class SSHProvisioner(object):
     sync_cmd_type = CMD_TYPE_SIMPLE
     sync_input = None
     sync_ok_result = None
+    ssh_user = None
+    host = "localhost"
+    port = 22
+    keys = None
+    known_hosts = None
+    cmd_timeout = 10
 
     def load_config(self, config_file, default_log_level, logObserverFactory):
         """                                                             
@@ -179,11 +209,10 @@ class SSHProvisioner(object):
                 event_type='init_provisioner')
             # Initialize template environment.
             self.template_env = jinja2.Environment(trim_blocks=True, lstrip_blocks=True)
-            self.template_env.filters['shellquote'] = shell_quote
+            self.template_env.filters['shellquote'] = filter_shellquote
+            self.template_env.filters['newline'] = filter_newline
             # Load SSH configuration info.
             try:
-                self.diagnostic_mode = bool(config.get("diagnostic_mode", False))
-                self.endpoint_s = config.get("endpoint", None)
                 self.provision_cmd = self.template_env.from_string(
                     config["provision_cmd"].strip())
                 self.deprovision_cmd = self.template_env.from_string(
@@ -198,24 +227,32 @@ class SSHProvisioner(object):
                     config.get("deprovision_cmd_type", "simple"))
                 self.sync_cmd_type = self.parse_command_type(
                     config.get("sync_cmd_type", "simple"))
-                self.provision_input = self.template_env.from_string(
-                    config["provision_input"].strip())
-                self.deprovision_input = self.template_env.from_string(
-                    config["deprovision_input"].strip())
-                template_str = config.get("sync_input", None)
-                if template_str is not None:
+                if self.provision_cmd_type == self.CMD_TYPE_INPUT:
+                    self.provision_input = self.template_env.from_string(
+                        config["provision_input"].strip())
+                if self.deprovision_cmd_type == self.CMD_TYPE_INPUT:
+                    self.deprovision_input = self.template_env.from_string(
+                        config["deprovision_input"].strip())
+                if self.sync_cmd_type == self.CMD_TYPE_INPUT:
+                    template_str = config.get("sync_input", None)
                     self.sync_input = self.template_env.from_string(
                         template_str.strip())
-                self.provision_ok_result = config["provision_ok_result"].strip()
-                self.deprovision_ok_result = config["deprovision_ok_result"].strip()
+                result = config.get("provision_ok_result", None)
+                if result is not None:
+                    self.provision_ok_result = int(result.strip())
+                result = config.get("deprovision_ok_result", None)
+                if result is not None:
+                    self.deprovision_ok_result = int(result.strip())
                 result = config.get("sync_ok_result", None)
                 if result is not None:
-                    self.sync_ok_result = result.strip()
-                # known hosts path
+                    self.sync_ok_result = int(result.strip())
+                self.cmd_timeout = int(config['cmd_timeout'])
+                self.host = config["host"]
+                self.port = int(config["port"])
+                self.ssh_user = config["user"]
+                self.known_hosts = os.path.expanduser(config["known_hosts"])
                 # ssh-agent endpoint
                 # keys; passwords (optional)
-                # host
-                # user
                 # command type; simple, argument driven OR input driven
                 # SSH timeout - how long should the connection stay established before 
                 # deciding no more commands are going to be issued for a while?
@@ -254,7 +291,8 @@ class SSHProvisioner(object):
                 yield self.provision_subject(msg)
             elif msg.action == constants.ACTION_DELETE:
                 yield self.deprovision_subject(msg)
-            elif msg.action = constants.ACTION_MEMBERSHIP_SYNC:
+            elif msg.action == constants.ACTION_MEMBERSHIP_SYNC:
+                log.info("msg => {msg}", msg=msg)
                 yield self.sync_membership(msg)
             else:
                 raise UnknownActionError(
@@ -266,7 +304,10 @@ class SSHProvisioner(object):
     def get_config_defaults(self):
         return dedent("""\
             [PROVISIONER]
-            diagnostic_mode = 0
+            host = localhost
+            port = 22
+            known_hosts = ~/.ssh/known_hosts
+            cmd_timeout = 10
             """)
 
     def parse_message(self, msg):
@@ -297,52 +338,73 @@ class SSHProvisioner(object):
         known_hosts = self.get_known_hosts()
         keys = self.get_keys()
         command = self.anchor_cmd
+        agent = self.get_agent()
         endpoint = SSHCommandClientEndpoint.newConnection(
             self.reactor,
             command,
-            self.user,
+            self.ssh_user,
             self.host,
             keys=keys,
-            knownHosts=known_hosts)
+            knownHosts=known_hosts,
+            agentEndpoint=agent)
         proto = AnchorProtocol()
+        proto.log = self.log
         proto.reactor = self.reactor
-        proto.connected.addCallback(self.set_connected)
+        proto.connected_future.addCallback(self.set_connected)
         proto.finished.addCallback(self.set_disconnected)
         proto = yield connectProtocol(endpoint, proto)
         self.ssh_conn = proto.transport.conn
-        yield proto.connected
+        yield proto.connected_future
         self.set_connected()
         returnValue(None)
 
-    def set_connected(self):
+    def set_connected(self, ignored=None):
         self.connected_to_target = True
 
     def set_disconnected(self, reason):
         self.connected_to_target = False    
 
-    def get_known_hosts(self):
-        """
-        """
-        pass
-
     def get_keys(self):
         """
+        TODO:
         """
-        pass
+        return None
+
+    def get_agent(self):
+        """
+        Get the SSH agent endpoint.
+        """
+        reactor = self.reactor
+        if "SSH_AUTH_SOCK" in os.environ:
+            agent_endpoint = UNIXClientEndpoint(reactor, os.environ["SSH_AUTH_SOCK"])
+        else:
+            agent_endpoint = None
+        return agent_endpoint
+
+    def get_known_hosts(self):
+        knownHostsPath = FilePath(self.known_hosts)
+        if knownHostsPath.exists():
+            knownHosts = KnownHostsFile.fromPath(knownHostsPath)
+        else:
+            knownHosts = None
+        return knownHosts
 
     @inlineCallbacks
     def create_command_channel(self, cmd):
         """
         Create an SSH channel over the existing connection and issue a command.
+        `cmd` should already be encoded as a byte string.
         Return the `CommandProtocol` instance.
         """
         if not self.connected_to_target:
             raise Exception("Tried to open channel, but was not connected to the target host.")
         ssh_conn = self.ssh_conn
         endpoint = SSHCommandClientEndpoint.existingConnection(
-            conn,
+            ssh_conn,
             cmd)
-        proto = yield endpoint.connect(factory)
+        proto = CommandProtocol()
+        proto.log = self.log
+        proto = yield connectProtocol(endpoint, proto)
         returnValue(proto)
 
     @inlineCallbacks
@@ -361,9 +423,9 @@ class SSHProvisioner(object):
         command = self.provision_cmd.render(
             subject=msg.subject, 
             group=msg.group)
-        command = command.encode('utf-8')
         # Create channel with command.
-        cmd_protocol = yield self.create_command_channel()
+        cmd_protocol = yield self.create_command_channel(command.encode('utf-8'))
+        patch_channel(cmd_protocol)
         transport = cmd_protocol.transport
         ssh_conn = transport.conn
         if command_type == self.CMD_TYPE_INPUT:
@@ -372,10 +434,29 @@ class SSHProvisioner(object):
                 subject=msg.subject,
                 group=msg.group)
             # Write input to channel.
-            cmd_protocol.transport.write(data)
+            cmd_protocol.transport.write(data.encode('utf-8'))
         # Send EOF
         ssh_conn.sendEOF(transport)
+        # Wait for connection to close.
+        finished = cmd_protocol.finished
+        finished.addTimeout(self.cmd_timeout, self.reactor)
+        try:
+            yield finished
+        except error.TimeoutError as ex:
+            log.error("Timed out while waiting for response to provisioning command '{command}.",
+                command=command)
+            raise
         # Evaluate response.
+        expected_status = self.provision_ok_result
+        if expected_status is not None:
+            exit_status = cmd_protocol.exit_status 
+            if exit_status != expected_status:
+                raise Exception(
+                    ("Actual provisioning command status '{actual}' did not "
+                    "match expected status '{expected}' for command '{command}'.").format(
+                    actual=exit_status,
+                    expected=expected_status,
+                    command=command))
         returnValue(None)
 
     @inlineCallbacks
@@ -387,8 +468,47 @@ class SSHProvisioner(object):
         log.debug(
             "Attempting to deprovision subject '{subject}' from group '{group}'.",
             subject=msg.subject, group=msg.group)
-        #TODO: Logic to de-provision subject goes here.
-        yield self.todo()
+        yield self.connect_to_target()
+        command = self.deprovision_cmd
+        command_type = self.deprovision_cmd_type
+        # Evaluate command template
+        command = self.deprovision_cmd.render(
+            subject=msg.subject, 
+            group=msg.group)
+        # Create channel with command.
+        cmd_protocol = yield self.create_command_channel(command.encode('utf-8'))
+        patch_channel(cmd_protocol)
+        transport = cmd_protocol.transport
+        ssh_conn = transport.conn
+        if command_type == self.CMD_TYPE_INPUT:
+            # Evaluate input template
+            data = self.deprovision_input.render(
+                subject=msg.subject,
+                group=msg.group)
+            # Write input to channel.
+            cmd_protocol.transport.write(data.encode('utf-8'))
+        # Send EOF
+        ssh_conn.sendEOF(transport)
+        # Wait for connection to close.
+        finished = cmd_protocol.finished
+        finished.addTimeout(self.cmd_timeout, self.reactor)
+        try:
+            yield finished
+        except error.TimeoutError as ex:
+            log.error("Timed out while waiting for response to deprovisioning command '{command}.",
+                command=command)
+            raise
+        # Evaluate response.
+        expected_status = self.provision_ok_result
+        if expected_status is not None:
+            exit_status = cmd_protocol.exit_status 
+            if exit_status != expected_status:
+                raise Exception(
+                    ("Actual deprovisioning command status '{actual}' did not "
+                    "match expected status '{expected}' for command '{command}'.").format(
+                    actual=exit_status,
+                    expected=expected_status,
+                    command=command))
         returnValue(None)
 
     @inlineCallbacks
@@ -398,8 +518,50 @@ class SSHProvisioner(object):
         """
         log = self.log
         log.debug(
-            "Attempting to synchronize membership for group '{0}'.",
+            "Attempting to synchronize membership for group '{group}'.",
             group=msg.group)
-        #TODO: Logic to de-provision subject goes here.
-        yield self.todo()
+        yield self.connect_to_target()
+        command = self.sync_cmd
+        if command is None:
+            raise Exception("Membership synchronization command is not configured.")
+        command_type = self.sync_cmd_type
+        # Evaluate command template
+        command = self.sync_cmd.render(
+            group=msg.group)
+        # Create channel with command.
+        cmd_protocol = yield self.create_command_channel(command.encode('utf-8'))
+        patch_channel(cmd_protocol)
+        transport = cmd_protocol.transport
+        ssh_conn = transport.conn
+        if command_type == self.CMD_TYPE_INPUT:
+            for subject in msg.subjects:
+                # Evaluate input template
+                data = self.sync_input.render(
+                    subject=subject,
+                    group=msg.group)
+                # Write input to channel.
+                cmd_protocol.transport.write(data.encode('utf-8'))
+        # Send EOF
+        ssh_conn.sendEOF(transport)
+        # Wait for connection to close.
+        finished = cmd_protocol.finished
+        finished.addTimeout(self.cmd_timeout, self.reactor)
+        try:
+            yield finished
+        except error.TimeoutError as ex:
+            log.error("Timed out while waiting for response to sync command '{command}.",
+                command=command)
+            raise
+        # Evaluate response.
+        expected_status = self.provision_ok_result
+        if expected_status is not None:
+            exit_status = cmd_protocol.exit_status 
+            if exit_status != expected_status:
+                raise Exception(
+                    ("Actual sync command status '{actual}' did not "
+                    "match expected status '{expected}' for command '{command}'.").format(
+                    actual=exit_status,
+                    expected=expected_status,
+                    command=command))
         returnValue(None)
+

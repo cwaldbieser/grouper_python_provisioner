@@ -8,3 +8,6 @@ kiki_provisioner_factory = KikiProvisionerFactory()
 from txgroupprovisioner.orgsync_provisioner import OrgsyncProvisionerFactory
 orgsync_provisioner_factory = OrgsyncProvisionerFactory()
 
+from txgroupprovisioner.ssh_provisioner import SSHProvisionerFactory
+ssh_provisioner_factory = SSHProvisionerFactory()
+
