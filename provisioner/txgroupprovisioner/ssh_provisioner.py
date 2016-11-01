@@ -1,14 +1,17 @@
 
 from __future__ import print_function
+import collections
 from collections import namedtuple
 import datetime
 import json
 import commentjson
 import jinja2 
 import os.path
+import re
 import struct
 from textwrap import dedent
 import types
+import commentjson
 from twisted.conch.client.knownhosts import KnownHostsFile
 from twisted.conch.endpoints import SSHCommandClientEndpoint
 from twisted.conch.ssh.keys import EncryptedKeyError, Key
@@ -189,6 +192,7 @@ class SSHProvisioner(object):
     keys = None
     known_hosts = None
     cmd_timeout = 10
+    group_map = None
 
     def load_config(self, config_file, default_log_level, logObserverFactory):
         """                                                             
@@ -251,20 +255,47 @@ class SSHProvisioner(object):
                 self.port = int(config["port"])
                 self.ssh_user = config["user"]
                 self.known_hosts = os.path.expanduser(config["known_hosts"])
-                # ssh-agent endpoint
-                # keys; passwords (optional)
-                # command type; simple, argument driven OR input driven
-                # SSH timeout - how long should the connection stay established before 
-                # deciding no more commands are going to be issued for a while?
             except KeyError as ex:
                 raise OptionMissingError(
                     "A require option was missing: '{0}:{1}'.".format(
                         section, ex.args[0]))
+            self.load_groupmap(config.get("group_map", None))
         except Exception as ex:
             d = self.reactor.callLater(0, self.reactor.stop)
             log.failure("Provisioner failed to initialize: {0}".format(ex))
             raise
         return defer.succeed(None)
+
+    def load_groupmap(self, path):
+        """
+        Load JSON group map.
+        """
+        with open(path, "r") as f:
+            doc = commentjson.load(f)
+        template_env = self.template_env
+        pattern_map = []
+        for pattern, template_str in doc:
+             compiled = re.compile(pattern)
+             template = template_env.from_string(template_str)
+             pattern_map.append((compiled, template))
+        self.group_map = pattern_map
+
+    def translate_group(self, group):
+        """
+        Attempt to translate a group name into target group name.
+        """
+        log = self.log
+        group_map = self.group_map
+        for compiled, template in group_map:
+            m = compiled.match(group)
+            if not m is  None:
+                groupdict = m.groupdict()
+                groupdict["orig_group"] = group
+                log.debug("Group translation symbols: {symbols}", symbols=groupdict)
+                result = template.render(**groupdict)
+                log.debug("Translated group: '{group}'", group=result)
+                return result
+        raise Exception("No pattern matched group '{0}'.".format(group))
 
     def parse_command_type(self, t):
         s = t.lower().strip()
@@ -416,13 +447,15 @@ class SSHProvisioner(object):
         log.debug(
             "Attempting to provision subject '{subject}' for group '{group}'.",
             subject=msg.subject, group=msg.group)
+        target_group = self.translate_group(msg.group)
+        log.debug("Target group: '{group}'", group=target_group)
         yield self.connect_to_target()
         command = self.provision_cmd
         command_type = self.provision_cmd_type
         # Evaluate command template
         command = self.provision_cmd.render(
             subject=msg.subject, 
-            group=msg.group)
+            group=target_group)
         # Create channel with command.
         cmd_protocol = yield self.create_command_channel(command.encode('utf-8'))
         patch_channel(cmd_protocol)
@@ -432,7 +465,7 @@ class SSHProvisioner(object):
             # Evaluate input template
             data = self.provision_input.render(
                 subject=msg.subject,
-                group=msg.group)
+                group=target_group)
             # Write input to channel.
             cmd_protocol.transport.write(data.encode('utf-8'))
         # Send EOF
@@ -468,13 +501,15 @@ class SSHProvisioner(object):
         log.debug(
             "Attempting to deprovision subject '{subject}' from group '{group}'.",
             subject=msg.subject, group=msg.group)
+        target_group = self.translate_group(msg.group)
+        log.debug("Target group: '{group}'", group=target_group)
         yield self.connect_to_target()
         command = self.deprovision_cmd
         command_type = self.deprovision_cmd_type
         # Evaluate command template
         command = self.deprovision_cmd.render(
             subject=msg.subject, 
-            group=msg.group)
+            group=target_group)
         # Create channel with command.
         cmd_protocol = yield self.create_command_channel(command.encode('utf-8'))
         patch_channel(cmd_protocol)
@@ -484,7 +519,7 @@ class SSHProvisioner(object):
             # Evaluate input template
             data = self.deprovision_input.render(
                 subject=msg.subject,
-                group=msg.group)
+                group=target_group)
             # Write input to channel.
             cmd_protocol.transport.write(data.encode('utf-8'))
         # Send EOF
@@ -520,6 +555,8 @@ class SSHProvisioner(object):
         log.debug(
             "Attempting to synchronize membership for group '{group}'.",
             group=msg.group)
+        target_group = self.translate_group(msg.group)
+        log.debug("Target group: '{group}'", group=target_group)
         yield self.connect_to_target()
         command = self.sync_cmd
         if command is None:
@@ -527,7 +564,7 @@ class SSHProvisioner(object):
         command_type = self.sync_cmd_type
         # Evaluate command template
         command = self.sync_cmd.render(
-            group=msg.group)
+            group=target_group)
         # Create channel with command.
         cmd_protocol = yield self.create_command_channel(command.encode('utf-8'))
         patch_channel(cmd_protocol)
@@ -538,7 +575,7 @@ class SSHProvisioner(object):
                 # Evaluate input template
                 data = self.sync_input.render(
                     subject=subject,
-                    group=msg.group)
+                    group=target_group)
                 # Write input to channel.
                 cmd_protocol.transport.write(data.encode('utf-8'))
         # Send EOF
