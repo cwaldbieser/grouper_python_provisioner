@@ -14,7 +14,7 @@ import sys
 import urlparse
 from jinja2 import Template
 from ldaptor.protocols import pureldap
-from ldaptor.protocols.ldap import ldapclient, ldapsyntax, ldapconnector
+from ldaptor.protocols.ldap import ldapclient, ldapsyntax
 from ldaptor.protocols.ldap.distinguishedname import DistinguishedName, RelativeDistinguishedName
 from ldaptor.protocols.ldap.distinguishedname import unescape as unescapeDN
 from ldaptor.protocols.ldap import ldaperrors
@@ -22,7 +22,8 @@ from twisted.plugin import IPlugin
 from zope.interface import implements
 from twisted.enterprise import adbapi
 from twisted.internet.defer import gatherResults, inlineCallbacks, returnValue
-from twisted.internet import task, threads
+from twisted.internet import endpoints
+from twisted.internet import task
 from twisted.internet.task import LoopingCall
 from twisted.logger import Logger
 from txgroupprovisioner.interface import IProvisionerFactory, IProvisioner
@@ -586,9 +587,11 @@ class LDAPProvisioner(object):
         ldap_port = self.ldap_port
         bind_dn = config.get('bind_dn', None)
         bind_passwd = config.get('passwd', None)
-        c = ldapconnector.LDAPClientCreator(self.reactor, ldapclient.LDAPClient)
-        overrides = {base_dn: (ldap_host, ldap_port)}
-        client = yield c.connect(base_dn, overrides=overrides)
+        ep = endpoints.TCP4ClientEndpoint(self.reactor, ldap_host, ldap_port)
+        log.debug("ldap_host: {ldap_host}", ldap_host=ldap_host)
+        log.debug("ldap_port: {ldap_port}", ldap_port=ldap_port)
+        client = yield endpoints.connectProtocol(ep, ldapclient.LDAPClient())
+        log.debug("Client TCP4 connection established to LDAP host and port.")
         try:
             log.debug(
                 "LDAP client connected to server: host={ldap_host}, port={ldap_port}",
