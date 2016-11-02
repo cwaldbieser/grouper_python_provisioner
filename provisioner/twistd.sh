@@ -5,9 +5,9 @@ SCRIPT="$THISDIR/$(basename $0)"
 TXSSHADMIN="$THISDIR/txsshadmin"
 
 if [ -z "$PYTHONPATH" ]; then
-    export PYTHONPATH="$TXSSHADMIN"
+    export PYTHONPATH="$THISDIR:$TXSSHADMIN"
 else
-    export PYTHONPATH="$PYTHONPATH:$TXSSHADMIN"
+    export PYTHONPATH="$PYTHONPATH:$THISDIR:$TXSSHADMIN"
 fi
 twistd $@
 
