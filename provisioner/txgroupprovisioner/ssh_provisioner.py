@@ -111,7 +111,7 @@ class AnchorProtocol(Protocol):
         Fires if the connection to the remote host is lost.
         This event fires even if the dropped connection was self-initiated.
         """
-        log.info("Connection to target host lost.")
+        self.log.info("Connection to target host lost.")
         self.finished.callback(reason)
 
 
@@ -381,18 +381,32 @@ class SSHProvisioner(object):
         proto = AnchorProtocol()
         proto.log = self.log
         proto.reactor = self.reactor
-        proto.connected_future.addCallback(self.set_connected)
+        proto.connected_future.addCallback(self.set_connected).addTimeout(
+            self.cmd_timeout, self.reactor)
         proto.finished.addCallback(self.set_disconnected)
         proto = yield connectProtocol(endpoint, proto)
+        yield proto.connected_future 
+        self.anchor = proto
         self.ssh_conn = proto.transport.conn
-        yield proto.connected_future
-        self.set_connected()
         returnValue(None)
 
+    def disconnect_from_target(self):
+        """
+        Disconnect the anchor SSH connection from the target host.
+        """
+        if not self.connected_to_target:
+            return
+        self.anchor.transport.loseConnection()
+        self.anchor = None
+        self.ssh_conn = None
+        self.set_disconnected()
+
     def set_connected(self, ignored=None):
+        self.log.debug("set_connected() called.")
         self.connected_to_target = True
 
-    def set_disconnected(self, reason):
+    def set_disconnected(self, *args):
+        self.log.debug("set_disconnected() called.")
         self.connected_to_target = False    
 
     def get_keys(self):
@@ -427,6 +441,7 @@ class SSHProvisioner(object):
         `cmd` should already be encoded as a byte string.
         Return the `CommandProtocol` instance.
         """
+        log = self.log
         if not self.connected_to_target:
             raise Exception("Tried to open channel, but was not connected to the target host.")
         ssh_conn = self.ssh_conn
@@ -435,7 +450,16 @@ class SSHProvisioner(object):
             cmd)
         proto = CommandProtocol()
         proto.log = self.log
-        proto = yield connectProtocol(endpoint, proto)
+        d = connectProtocol(endpoint, proto)
+
+        def _on_timeout(result, timeout):
+            self.disconnect_from_target()
+            raise Exception("Timed out while attempting to establish command channel.")
+
+        d.addTimeout(self.cmd_timeout, self.reactor, onTimeoutCancel=_on_timeout)
+        log.debug("Establishing channel ...")
+        proto = yield d
+        log.debug("Channel established.")
         returnValue(proto)
 
     @inlineCallbacks
@@ -566,7 +590,9 @@ class SSHProvisioner(object):
         command = self.sync_cmd.render(
             group=target_group)
         # Create channel with command.
+        log.debug("Creating command channel ...")
         cmd_protocol = yield self.create_command_channel(command.encode('utf-8'))
+        log.debug("Command channel created.")
         patch_channel(cmd_protocol)
         transport = cmd_protocol.transport
         ssh_conn = transport.conn
@@ -583,12 +609,14 @@ class SSHProvisioner(object):
         # Wait for connection to close.
         finished = cmd_protocol.finished
         finished.addTimeout(self.cmd_timeout, self.reactor)
+        log.debug("Command timeout: {timeout} seconds", timeout=self.cmd_timeout)
         try:
             yield finished
         except error.TimeoutError as ex:
             log.error("Timed out while waiting for response to sync command '{command}.",
                 command=command)
             raise
+        log.debug("Command was sent.")
         # Evaluate response.
         expected_status = self.provision_ok_result
         if expected_status is not None:
