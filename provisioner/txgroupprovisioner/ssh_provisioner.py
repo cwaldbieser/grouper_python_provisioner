@@ -423,7 +423,7 @@ class SSHProvisioner(object):
             log.debug("Looking up SSH private key at '{path}' ...", path=keyPath)
             keyPath = os.path.expanduser(keyPath)
             if os.path.exists(keyPath):
-                keys.append(readKey(keyPath))
+                keys.append(self.readKey(keyPath))
                 log.debug("Read SSH private key at '{path}'.", path=keyPath)
         log.info("Loaded {count} SSH private keys.", count=len(keys))
         return keys
@@ -504,16 +504,19 @@ class SSHProvisioner(object):
             subject=msg.subject, 
             group=target_group)
         # Create channel with command.
+        log.debug("Creating command channel with command: {command}", command=command)
         cmd_protocol = yield self.create_command_channel(command.encode('utf-8'))
         patch_channel(cmd_protocol)
         transport = cmd_protocol.transport
         ssh_conn = transport.conn
         if command_type == self.CMD_TYPE_INPUT:
+            log.debug("Provision command type is INPUT.")
             # Evaluate input template
             data = self.provision_input.render(
                 subject=msg.subject,
                 group=target_group)
             # Write input to channel.
+            log.debug("Writing data to channel: {data}", data=data)
             cmd_protocol.transport.write(data.encode('utf-8'))
         # Send EOF
         ssh_conn.sendEOF(transport)
@@ -558,6 +561,7 @@ class SSHProvisioner(object):
             subject=msg.subject, 
             group=target_group)
         # Create channel with command.
+        log.debug("Creating command channel with command: {command}", command=command)
         cmd_protocol = yield self.create_command_channel(command.encode('utf-8'))
         patch_channel(cmd_protocol)
         transport = cmd_protocol.transport
@@ -613,7 +617,7 @@ class SSHProvisioner(object):
         command = self.sync_cmd.render(
             group=target_group)
         # Create channel with command.
-        log.debug("Creating command channel ...")
+        log.debug("Creating command channel with command: {command}", command=command)
         cmd_protocol = yield self.create_command_channel(command.encode('utf-8'))
         log.debug("Command channel created.")
         patch_channel(cmd_protocol)
