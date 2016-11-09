@@ -255,6 +255,8 @@ class SSHProvisioner(object):
                 self.port = int(config["port"])
                 self.ssh_user = config["user"]
                 self.known_hosts = os.path.expanduser(config["known_hosts"])
+                if "keys" in config:
+                    self.keys = config["keys"].split(",")
             except KeyError as ex:
                 raise OptionMissingError(
                     "A require option was missing: '{0}:{1}'.".format(
@@ -411,9 +413,30 @@ class SSHProvisioner(object):
 
     def get_keys(self):
         """
-        TODO:
+        Get SSH private keys. 
         """
-        return None
+        log = self.log
+        keys = []
+        if self.keys is None:
+            return None
+        for keyPath in self.keys:
+            log.debug("Looking up SSH private key at '{path}' ...", path=keyPath)
+            keyPath = os.path.expanduser(keyPath)
+            if os.path.exists(keyPath):
+                keys.append(readKey(keyPath))
+                log.debug("Read SSH private key at '{path}'.", path=keyPath)
+        log.info("Loaded {count} SSH private keys.", count=len(keys))
+        return keys
+
+    def readKey(self, path):
+        try:
+            return Key.fromFile(path)
+        except EncryptedKeyError as ex:
+            passphrase = getpass.getpass("%r keyphrase: " % (path,))
+            return Key.fromFile(path, passphrase=passphrase)
+        except Exception as ex:
+            print(ex)
+            raise
 
     def get_agent(self):
         """
