@@ -615,7 +615,8 @@ class SSHProvisioner(object):
         command_type = self.sync_cmd_type
         # Evaluate command template
         command = self.sync_cmd.render(
-            group=target_group)
+            group=target_group, 
+            subjects=msg.subjects)
         # Create channel with command.
         log.debug("Creating command channel with command: {command}", command=command)
         cmd_protocol = yield self.create_command_channel(command.encode('utf-8'))
