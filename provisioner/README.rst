@@ -351,6 +351,14 @@ configuration (dictionary) consisting of the following keys:
 * **create_context**: (string) The parent DN under which the group should be 
   created if the **create_group** option is set to `true`.
 
+Alternatively, the inbound membership can be used to provision an attribute by
+providing a dictionary with the following keys:
+
+* **attribute**: (string) The LDAP attribute name.
+* **value**: (string) The LDAP attribute value to add/remove.
+* **multi_valued**: (boolean) A flag that indicates whether this attribute can have
+  multiple values.
+
 Valid targets for a stem may be either a template (string) or an LDAP template
 configuration (dictionary) consiting of the following keys:
 
