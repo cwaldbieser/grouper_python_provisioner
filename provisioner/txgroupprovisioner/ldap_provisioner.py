@@ -320,7 +320,8 @@ class LDAPProvisioner(object):
                         members,
                         group_type=group_type)
                 elif target.target_type == "attribute":
-                    yield self.sync_attribute(target, subjects, client)
+                    if self.provision_user:
+                        yield self.sync_attribute(target, subjects, client)
             except Exception as ex:
                 log.error("Fatal error:\n{error}", error=ex)
                 raise
