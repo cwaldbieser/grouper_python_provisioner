@@ -193,6 +193,7 @@ class KikiProvisioner(object):
                     tag))
         attrib_resolver = factory.generate_attribute_resolver(config_parser)
         attrib_resolver.log = self.log
+        attrib_resolver.reactor = self.reactor
         self.attrib_resolver = attrib_resolver
 
     def install_router(self, tag, config_parser):

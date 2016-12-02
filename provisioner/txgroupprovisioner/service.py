@@ -23,7 +23,7 @@ import txamqp.spec
 from config import load_config, section2dict
 from errors import EndpointError
 from interface import IProvisionerFactory
-from logging import make_syslog_observer, make_file_observer
+from provisioner_logging import make_syslog_observer, make_file_observer
 from utils import get_plugin_factory
 
 

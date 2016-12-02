@@ -59,6 +59,8 @@ class IAttributeResolverFactory(Interface):
     
 
 class IAttributeResolver(Interface):
+    log = Attribute('A logger.')
+    reactor = Attribute('A reactor instance.')
 
     def resolve_attributes(subject):
         """

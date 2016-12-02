@@ -29,9 +29,9 @@ class PyChangeloggerMessageParser(object):
         """
         body = msg.content.body
         parts = body.split("\n")
-        group = parts[0]
-        subject = parts[1]
-        action = parts[2]
+        group = parts[0].strip()
+        subject = parts[1].strip()
+        action = parts[2].strip()
         if action.startswith("delete"):
             action = constants.ACTION_DELETE
         else:
