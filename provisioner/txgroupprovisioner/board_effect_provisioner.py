@@ -129,7 +129,7 @@ class BoardEffectProvisioner(object):
                 self.accounts_query = config['accounts_query']
                 self.account_update = jinja2.Template(config['account_update'])
                 self.account_delete = jinja2.Template(config['account_delete'])
-                self.account_add = jinja2.Template(config['account_add'])
+                self.account_add = config['account_add']
                 account_template_path = config['account_template']
                 attrib_map_path = config["attribute_map"]
             except KeyError as ex:
@@ -153,6 +153,7 @@ class BoardEffectProvisioner(object):
         return defer.succeed(None)
 
     def make_attribute_map(self, path):
+        log = self.log
         with open(path, "r") as f:
             doc = commentjson.load(f)
         self.attribute_map = {}
@@ -214,167 +215,6 @@ class BoardEffectProvisioner(object):
             attributes = doc['attributes']
         return ParsedMessage(action, subject, attributes)
 
-    @inlineCallbacks
-    def provision_subject(self, msg):
-        """
-        Provision a subject to Board Effect.
-        """
-        log = self.log
-        log.debug(
-            "Attempting to provision subject '{subject}'.",
-            subject=msg.subject)
-        account = yield self.fetch_existing_account(msg)
-        if account is not None:
-            yield self.update_subject(account, msg)
-        else:
-            yield self.add_subject(msg)
-        returnValue(None)
-
-    @inlineCallbacks
-    def make_authenticated_api_call(self, method, url, **http_options):
-        http_client = self.http_client
-        auth_token = self.__auth_token
-        if auth_token is None:
-            prefix = self.url_prefix
-            url = "{0}{1}".format(
-                prefix,
-                self.authenticate 
-            )
-            headers = {
-                'Accept': ['application/json'],
-            }
-            api_key = self.api_key
-            params = dict(api_key=api_key)
-            response = yield http_client.get(url, headers=headers, params=params)
-            resp_code = response.code
-            if resp_code == 200:
-                try:
-                    doc = yield resp.json()
-                except Exception as ex:
-                    log.error("Error attempting to parse response to authentication request.")
-                    raise
-                if not "data" in doc:
-                    log.error("Error attempting to parse response to authentication request.")
-                    raise Exception("Error parsing authentication response.")
-                data = doc["data"]
-                if not "token" in data:
-                    log.error("Error attempting to parse response to authentication request.")
-                    raise Exception("Error parsing authentication response.")
-                self.__auth_token = data["token"]
-                auth_token =  self.__auth_token
-        headers = http_options.setdefault("headers", {})
-        headers["Authorization"] = [auth_token]
-        method = method.lower()
-        response = yield getattr(http_client, method)(url, **http_options)
-        returnValue(response)
-
-    @inlineCallbacks
-    def fetch_all_users(self):
-        """
-        Load all remote user accounts from the sevice.
-        """
-        http_client = self.http_client
-        prefix = self.url_prefix
-        url = "{0}{1}".format(prefix, self.accounts_query)
-        headers = {
-            'Accept': ['application/json'],
-        }
-        log.debug("URL (GET): {url}", url=url)
-        log.debug("headers: {headers}", headers=headers)
-        try:
-            resp = yield self.make_authenticated_api_call("GET", url, headers=headers, params=params)
-        except Exception as ex:
-            log.error("Error attempting to retrieve existing account.")
-            raise
-        resp_code = resp.code
-        if resp_code != 200:
-            raise Exception("Invalid response code: {0}".format(resp_code))
-        try:
-            doc = yield resp.json()
-        except Exception as ex:
-            log.error("Error attempting to parse response.")
-            raise
-        log.debug(
-            "Received response: {response}",
-            response=doc)
-        returnValue(doc)
-
-    @inlineCallbacks
-    def fetch_account_id(self, msg):
-        """
-        Fetch an existing remote account ID and return it or None if the remote 
-        account does not exist.
-        """
-        log = self.log
-        log.debug("Attempting to fetch existing account.")
-        account_cache = self.__account_cache
-        cache_size = self.cache_size
-        account_data = None
-        if len(account_cache) < cache_size:
-            # Prefill cache.
-            doc = yield self.fetch_all_users()
-            account_data = response["data"]
-            for n, entry in data: 
-                if n >= cache_size:
-                    break
-                login = entry["login"]
-                identifier = entry["id"]
-                account_cache[login] = identifier 
-        subject = msg.subject.lower()
-        if subject in account_cache:
-            remote_id = account_cache[subject]
-            returnValue(remot
-        if account_data is None:
-            account_data = yield self.fetch_all_users()
-        for entry in data:
-            if entry["login"].lower() == subject:
-                remote_id = entry["id"]
-                account_cache[subject] = remote_id
-                returnValue(remote_id)
-        returnValue(None)
-
-    @inlineCallbacks
-    def update_subject(self, account, msg):
-        """
-        Update a remote account.
-        """
-        log = self.log
-        subject = msg.subject
-        remote_id = yield self.fetch_account_id(msg)
-        if remote_id is None:
-            raise Exception(
-                ("Remote account does not exist for update."
-                "  subject: {subject}, id: {remote_id}").format(
-                subject=subject,
-                remote_id=remote_id))
-        log.debug("Updating subject '{subject}'", subject=subject)
-        attributes = msg.attributes
-        props = self.map_attributes(attributes, subject, msg.action)
-        prefix = self.url_prefix
-        url = "{0}{1}".format(
-            prefix,
-            self.account_update.render(
-                account=account,
-                subject=msg.subject,
-                attributes=props))
-        headers = {'Accept': ['application/json']}
-        log.debug("url: {url}", url=url)
-        log.debug("headers: {headers}", headers=headers)
-        log.debug("data: {props}", props=props)
-        if not self.diagnostic_mode:
-            try:
-                resp = yield self.makeauthenticated_api_call(
-                    'PUT',  
-                    url, 
-                    data=StringProducer(json.dumps(props).encode('utf-8')), 
-                    headers=headers)
-            except Exception as ex:
-                log.error("Error attempting to update existing account.")
-                raise
-            resp_code = resp.code
-            log.debug("Response code: {code}", code=resp_code)
-            yield resp.content()
-
     def map_attributes(self, attribs, subject, action):
         """
         Map subject attributes to remote service attributes.
@@ -392,25 +232,201 @@ class BoardEffectProvisioner(object):
         return props
 
     @inlineCallbacks
+    def provision_subject(self, msg):
+        """
+        Provision a subject to Board Effect.
+        """
+        log = self.log
+        log.debug(
+            "Attempting to provision subject '{subject}'.",
+            subject=msg.subject)
+        remote_id = yield self.fetch_account_id(msg)
+        if remote_id is not None:
+            yield self.update_subject(remote_id, msg)
+        else:
+            yield self.add_subject(msg)
+        returnValue(None)
+
+    @inlineCallbacks
+    def make_authenticated_api_call(self, method, url, **http_options):
+        log = self.log
+        log.debug("Making authenticated API call ...")
+        http_client = self.http_client
+        auth_token = self.__auth_token
+        if auth_token is None:
+            log.debug("Must obtain auth token ...")
+            prefix = self.url_prefix
+            auth_url = "{0}{1}".format(
+                prefix,
+                self.authenticate 
+            )
+            headers = {
+                'Accept': ['application/json'],
+            }
+            api_key = self.api_key
+            data = dict(api_key=api_key)
+            log.debug("Making API call to obtain auth token ...")
+            log.debug("method: POST, URL: {url}", url=auth_url)
+            response = yield http_client.post(auth_url, data=data, headers=headers)
+            resp_code = response.code
+            log.debug("API call complete.  Response code: {code}", code=resp_code)
+            if resp_code == 200:
+                try:
+                    doc = yield response.json()
+                except Exception as ex:
+                    log.error("Error attempting to parse response to authentication request.")
+                    raise
+                if not "data" in doc:
+                    log.error("Error attempting to parse response to authentication request.")
+                    raise Exception("Error parsing authentication response.")
+                data = doc["data"]
+                if not "token" in data:
+                    log.error("Error attempting to parse response to authentication request.")
+                    raise Exception("Error parsing authentication response.")
+                self.__auth_token = data["token"]
+                auth_token =  self.__auth_token
+            else:
+                content = yield response.content()
+                raise Exception(
+                    "Could not obtain auth token.  Response ({code}) was:\n{content}".format(
+                        code=resp_code,
+                        content=content))
+        log.debug("Have auth token.")
+        headers = http_options.setdefault("headers", {})
+        headers["Authorization"] = [auth_token]
+        method = method.lower()
+        log.debug("Making API call.  method: {method}, URL: {url}", method=method, url=url)
+        response = yield getattr(http_client, method)(url, **http_options)
+        log.debug("API call complete.  Response code: {code}", code=response.code)
+        returnValue(response)
+
+    @inlineCallbacks
+    def fetch_all_users(self):
+        """
+        Load all remote user accounts from the sevice.
+        """
+        log = self.log
+        log.debug("Attempting to fetch all remote user IDs ...")
+        http_client = self.http_client
+        prefix = self.url_prefix
+        url = "{0}{1}".format(prefix, self.accounts_query)
+        headers = {
+            'Accept': ['application/json'],
+        }
+        log.debug("URL (GET): {url}", url=url)
+        log.debug("headers: {headers}", headers=headers)
+        try:
+            resp = yield self.make_authenticated_api_call("GET", url, headers=headers)
+        except Exception as ex:
+            log.error("Error attempting to retrieve existing account.")
+            raise
+        log.debug("HTTP GET complete.  Response code was: {code}", code=resp.code)
+        resp_code = resp.code
+        if resp_code != 200:
+            raise Exception("Invalid response code: {0}".format(resp_code))
+        try:
+            doc = yield resp.json()
+        except Exception as ex:
+            log.error("Error attempting to parse response.")
+            raise
+        log.debug("Received valid JSON response")
+        returnValue(doc)
+
+    @inlineCallbacks
+    def fetch_account_id(self, msg):
+        """
+        Fetch an existing remote account ID and return it or None if the remote 
+        account does not exist.
+        """
+        log = self.log
+        log.debug("Attempting to fetch existing account.")
+        account_cache = self.__account_cache
+        cache_size = self.cache_size
+        log.debug("cache max size: {cache_size}", cache_size=cache_size)
+        log.debug("cache current size: {cache_size}", cache_size=len(account_cache))
+        account_data = None
+        if len(account_cache) == 0: 
+            # Prefill cache.
+            log.debug("Prefilling cache ...")
+            doc = yield self.fetch_all_users()
+            account_data = doc["data"]
+            for entry in account_data: 
+                if len(account_cache) >= cache_size:
+                    break
+                login = entry["login"]
+                identifier = entry["id"]
+                account_cache[login] = identifier 
+            log.debug("Cache size after prefill: {cache_size}", cache_size=len(account_cache))
+        subject = msg.subject.lower()
+        if subject in account_cache:
+            remote_id = account_cache[subject]
+            returnValue(remote_id)
+        log.debug("Account ID not in cache for '{subject}.", subject=subject)
+        if account_data is None:
+            account_data = yield self.fetch_all_users()
+        for entry in account_data:
+            if entry["login"].lower() == subject:
+                remote_id = entry["id"]
+                account_cache[subject] = remote_id
+                log.debug("Added entry to cache: {login}: {identifier}", login=login, identifier=identifier)
+                returnValue(remote_id)
+        returnValue(None)
+
+    @inlineCallbacks
+    def update_subject(self, remote_id, msg):
+        """
+        Update a remote account.
+        """
+        log = self.log
+        subject = msg.subject
+        log.debug("Updating subject '{subject}'", subject=subject)
+        attributes = msg.attributes
+        props = self.map_attributes(attributes, subject, msg.action)
+        prefix = self.url_prefix
+        url = "{0}{1}".format(
+            prefix,
+            self.account_update.render(
+                remote_id=remote_id,
+                subject=msg.subject,
+                attributes=props))
+        headers = {'Accept': ['application/json']}
+        log.debug("url: {url}", url=url)
+        log.debug("headers: {headers}", headers=headers)
+        log.debug("data: {props}", props=props)
+        if not self.diagnostic_mode:
+            try:
+                resp = yield self.makeauthenticated_api_call(
+                    'PUT',  
+                    url, 
+                    data=props, 
+                    headers=headers)
+            except Exception as ex:
+                log.error("Error attempting to update existing account.")
+                raise
+            resp_code = resp.code
+            log.debug("Response code: {code}", code=resp_code)
+            yield resp.content()
+
+    @inlineCallbacks
     def add_subject(self, msg):
         """
         Add a remote service account.
         """
         log = self.log
+        subject = msg.subject.lower()
+        action = msg.action
         log.debug("Adding a new account ...")
         attributes = msg.attributes
-        props = self.map_attributes(attributes, subject, msg.action)
+        props = self.map_attributes(attributes, subject, action)
         account_doc = self.account_template.render(
-            attributes=props,
-            subject=msg.subject,
-            action=msg.action)
+            props=props,
+            subject=subject,
+            action=action)
         log.debug("Account doc: {doc}", doc=account_doc)
         prefix = self.url_prefix
         url = "{0}{1}".format(
             prefix,
-            self.account_add.render(
-                account=json.dumps(account_doc),
-                subject=msg.subject))
+            self.account_add)
         headers = {
             'Accept': ['application/json'], 
             'Content-Type': ['application/json']}
@@ -444,14 +460,14 @@ class BoardEffectProvisioner(object):
             "Attempting to deprovision subject '{subject}'.",
             subject=subject)
         remote_id = yield self.fetch_account_id(msg)
-        if account is None:
+        if remote_id is None:
             log.debug("Account '{subject}' does not exist on the remote service.",
                 subject=subject)
             returnValue(None)
         prefix = self.url_prefix
         url = "{0}{1}".format(
             prefix,
-            self.account_delete.render(remote_id=remote_id)
+            self.account_delete.render(remote_id=remote_id))
         headers = {
             'Accept': ['application/json']}
         log.debug("url: {url}", url=url)

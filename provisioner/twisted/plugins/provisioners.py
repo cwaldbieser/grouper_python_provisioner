@@ -11,3 +11,6 @@ orgsync_provisioner_factory = OrgsyncProvisionerFactory()
 from txgroupprovisioner.ssh_provisioner import SSHProvisionerFactory
 ssh_provisioner_factory = SSHProvisionerFactory()
 
+from txgroupprovisioner.board_effect_provisioner import BoardEffectProvisionerFactory
+board_effect_provisioner_factory = BoardEffectProvisionerFactory()
+
