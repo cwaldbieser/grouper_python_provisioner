@@ -120,7 +120,7 @@ class BoardEffectProvisioner(object):
                 event_type='init_provisioner')
             # Load API configuration info-- endpoint info, URL, API key.
             try:
-                self.diagnostic_mode = bool(config.get("diagnostic_mode", False))
+                self.diagnostic_mode = bool(int(config.get("diagnostic_mode", 0)))
                 self.endpoint_s = config.get("endpoint", None)
                 self.url_prefix = config["url_prefix"]
                 self.api_key = config["api_key"]
@@ -146,6 +146,7 @@ class BoardEffectProvisioner(object):
             self.__account_cache = pylru.lrucache(self.cache_size)
             # Initialize access token.
             self.__auth_token = None
+            log.info("Diagnostic mode: {diagnostic}", diagnostic=self.diagnostic_mode)
         except Exception as ex:
             d = self.reactor.callLater(0, self.reactor.stop)
             log.failure("Provisioner failed to initialize: {0}".format(ex))
@@ -474,7 +475,7 @@ class BoardEffectProvisioner(object):
         log.debug("headers: {headers}", headers=headers)
         if not self.diagnostic_mode:
             try:
-                resp = yield self,make_authenticated_api_call(
+                resp = yield self.make_authenticated_api_call(
                     'DELETE',
                     url, 
                     headers=headers)
@@ -486,7 +487,13 @@ class BoardEffectProvisioner(object):
                 raise
             resp_code = resp.code
             log.debug("Response code: {code}", code=resp_code)
-            yield resp.content()
+            content = yield resp.content()
+            if resp_code != 200:
+                log.error(
+                    "API error attempting to delete subject {subject}:\n{content}",
+                    subject=subject,
+                    content=content)
+                raise Exception("API error attempting to delete remote subject.")
             account_cache = self.__account_cache
             if subject in account_cache:
                 del account_cache[subject]
