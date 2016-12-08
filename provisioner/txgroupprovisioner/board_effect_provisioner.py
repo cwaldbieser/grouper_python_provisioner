@@ -340,10 +340,16 @@ class BoardEffectProvisioner(object):
         """
         log = self.log
         subject = msg.subject
+        remote_id = yield self.fetch_account_id(msg)
+        if remote_id is None:
+            raise Exception(
+                ("Remote account does not exist for update."
+                "  subject: {subject}, id: {remote_id}").format(
+                subject=subject,
+                remote_id=remote_id))
         log.debug("Updating subject '{subject}'", subject=subject)
         attributes = msg.attributes
         props = self.map_attributes(attributes, subject, msg.action)
-        http_client = self.http_client
         prefix = self.url_prefix
         url = "{0}{1}".format(
             prefix,
@@ -351,15 +357,17 @@ class BoardEffectProvisioner(object):
                 account=account,
                 subject=msg.subject,
                 attributes=props))
-        params = {'key': self.api_key}
-        params.update(props)
         headers = {'Accept': ['application/json']}
         log.debug("url: {url}", url=url)
         log.debug("headers: {headers}", headers=headers)
-        log.debug("params: {params}", params=params)
+        log.debug("data: {props}", props=props)
         if not self.diagnostic_mode:
             try:
-                resp = yield http_client.put(url, headers=headers, params=params)
+                resp = yield self.makeauthenticated_api_call(
+                    'PUT',  
+                    url, 
+                    data=StringProducer(json.dumps(props).encode('utf-8')), 
+                    headers=headers)
             except Exception as ex:
                 log.error("Error attempting to update existing account.")
                 raise
@@ -369,8 +377,8 @@ class BoardEffectProvisioner(object):
 
     def map_attributes(self, attribs, subject, action):
         """
-        Map subject attributes to OrgSync attributes.
-        Returns OrgSync attributes mapping.
+        Map subject attributes to remote service attributes.
+        Returns attributes mapping.
         """
         attrib_map = self.attribute_map
         props = {}
@@ -386,12 +394,10 @@ class BoardEffectProvisioner(object):
     @inlineCallbacks
     def add_subject(self, msg):
         """
-        Add an Orgsync account.
+        Add a remote service account.
         """
         log = self.log
-        if False:
-            yield None
-        log.debug("Adding a new account.")
+        log.debug("Adding a new account ...")
         attributes = msg.attributes
         props = self.map_attributes(attributes, subject, msg.action)
         account_doc = self.account_template.render(
@@ -399,69 +405,75 @@ class BoardEffectProvisioner(object):
             subject=msg.subject,
             action=msg.action)
         log.debug("Account doc: {doc}", doc=account_doc)
-        http_client = self.http_client
         prefix = self.url_prefix
         url = "{0}{1}".format(
             prefix,
             self.account_add.render(
                 account=json.dumps(account_doc),
                 subject=msg.subject))
-        params = {'key': self.api_key}
         headers = {
             'Accept': ['application/json'], 
             'Content-Type': ['application/json']}
         log.debug("url: {url}", url=url)
         log.debug("headers: {headers}", headers=headers)
-        log.debug("params: {params}", params=params)
+        log.debug("data: {account_doc}", account_doc=account_doc)
         if not self.diagnostic_mode:
             try:
-                resp = yield http_client.post(
+                resp = yield self.make_authenticated_api_call(
+                    'POST',
                     url, 
                     data=StringProducer(account_doc.encode('utf-8')), 
-                    headers=headers, 
-                    params=params)
+                    headers=headers) 
             except Exception as ex:
                 log.error("Error attempting to add new account.")
                 raise
             resp_code = resp.code
             log.debug("Response code: {code}", code=resp_code)
-            yield resp.content()
+            doc = yield resp.json()
+            remote_id = doc["id"]
+            self.__account_cache[subject.lower()] = remote_id
 
     @inlineCallbacks
     def deprovision_subject(self, msg):
         """
-        Deprovision a subject from Orgsync.
+        Deprovision a subject from the remote service.
         """
         log = self.log
+        subject = msg.subject.lower()
         log.debug(
             "Attempting to deprovision subject '{subject}'.",
-            subject=msg.subject)
-        account = yield self.fetch_existing_account(msg)
+            subject=subject)
+        remote_id = yield self.fetch_account_id(msg)
         if account is None:
-            log.debug("Account already does not exist.")
+            log.debug("Account '{subject}' does not exist on the remote service.",
+                subject=subject)
             returnValue(None)
-        http_client = self.http_client
         prefix = self.url_prefix
         url = "{0}{1}".format(
             prefix,
-            self.account_delete.render(
-                account=account,
-                subject=msg.subject))
-        params = {'key': self.api_key}
+            self.account_delete.render(remote_id=remote_id)
         headers = {
             'Accept': ['application/json']}
         log.debug("url: {url}", url=url)
         log.debug("headers: {headers}", headers=headers)
-        log.debug("params: {params}", params=params)
         if not self.diagnostic_mode:
             try:
-                resp = yield http_client.delete(url, headers=headers, params=params)
+                resp = yield self,make_authenticated_api_call(
+                    'DELETE',
+                    url, 
+                    headers=headers)
             except Exception as ex:
-                log.error("Error attempting to delete existing account.")
+                log.error(
+                    "Error attempting to delete existing account.  subject: {subject}",
+                    subject=subject
+                )
                 raise
             resp_code = resp.code
             log.debug("Response code: {code}", code=resp_code)
             yield resp.content()
+            account_cache = self.__account_cache
+            if subject in account_cache:
+                del account_cache[subject]
 
     def make_web_agent(self):
         """
