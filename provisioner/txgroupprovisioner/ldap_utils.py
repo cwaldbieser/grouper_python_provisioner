@@ -1,4 +1,5 @@
 
+from ldaptor.protocols.ldap.distinguishedname import DistinguishedName, RelativeDistinguishedName
 
 def escape_filter_chars(assertion_value,escape_mode=0):
     """
