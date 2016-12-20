@@ -372,7 +372,7 @@ class BoardEffectProvisioner(object):
             if entry["login"].lower() == subject:
                 remote_id = entry["id"]
                 account_cache[subject] = remote_id
-                log.debug("Added entry to cache: {login}: {identifier}", login=login, identifier=identifier)
+                log.debug("Added entry to cache: {login}: {identifier}", login=login, identifier=remote_id)
                 returnValue(remote_id)
         returnValue(None)
 
