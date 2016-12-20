@@ -316,8 +316,9 @@ class BoardEffectProvisioner(object):
         }
         log.debug("URL (GET): {url}", url=url)
         log.debug("headers: {headers}", headers=headers)
+        params={'include_inactive': 'true'}
         try:
-            resp = yield self.make_authenticated_api_call("GET", url, headers=headers)
+            resp = yield self.make_authenticated_api_call("GET", url, headers=headers, params=params)
         except Exception as ex:
             log.error("Error attempting to retrieve existing account.")
             raise
@@ -364,8 +365,10 @@ class BoardEffectProvisioner(object):
             returnValue(remote_id)
         log.debug("Account ID not in cache for '{subject}.", subject=subject)
         if account_data is None:
-            account_data = yield self.fetch_all_users()
+            doc = yield self.fetch_all_users()
+            account_data = doc["data"]
         for entry in account_data:
+            log.debug("Looping through entries ...")
             if entry["login"].lower() == subject:
                 remote_id = entry["id"]
                 account_cache[subject] = remote_id
@@ -379,10 +382,12 @@ class BoardEffectProvisioner(object):
         Update a remote account.
         """
         log = self.log
+        log.debug("Entered update_subject().")
         subject = msg.subject
         log.debug("Updating subject '{subject}'", subject=subject)
         attributes = msg.attributes
         props = self.map_attributes(attributes, subject, msg.action)
+        props['active'] = '1'
         prefix = self.url_prefix
         url = "{0}{1}".format(
             prefix,
@@ -396,7 +401,7 @@ class BoardEffectProvisioner(object):
         log.debug("data: {props}", props=props)
         if not self.diagnostic_mode:
             try:
-                resp = yield self.makeauthenticated_api_call(
+                resp = yield self.make_authenticated_api_call(
                     'PUT',  
                     url, 
                     data=props, 
@@ -414,11 +419,13 @@ class BoardEffectProvisioner(object):
         Add a remote service account.
         """
         log = self.log
+        log.debug("Entered add_subject().")
         subject = msg.subject.lower()
         action = msg.action
         log.debug("Adding a new account ...")
         attributes = msg.attributes
         props = self.map_attributes(attributes, subject, action)
+        props['active'] = '1'
         account_doc = self.account_template.render(
             props=props,
             subject=subject,
@@ -456,6 +463,7 @@ class BoardEffectProvisioner(object):
         Deprovision a subject from the remote service.
         """
         log = self.log
+        log.debug("Entered deprovision_subject().")
         subject = msg.subject.lower()
         log.debug(
             "Attempting to deprovision subject '{subject}'.",
@@ -473,12 +481,14 @@ class BoardEffectProvisioner(object):
             'Accept': ['application/json']}
         log.debug("url: {url}", url=url)
         log.debug("headers: {headers}", headers=headers)
+        data = {'active': '0'}
         if not self.diagnostic_mode:
             try:
                 resp = yield self.make_authenticated_api_call(
-                    'DELETE',
+                    'PUT',
                     url, 
-                    headers=headers)
+                    headers=headers,
+                    data=data)
             except Exception as ex:
                 log.error(
                     "Error attempting to delete existing account.  subject: {subject}",
