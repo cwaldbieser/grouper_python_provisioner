@@ -4,6 +4,7 @@ from collections import namedtuple
 import datetime
 import json
 import commentjson
+import jinja2 
 from textwrap import dedent
 import attr
 import pylru
@@ -48,20 +49,14 @@ class MembershipMessage(object):
 @attr.attrs
 class SyncMessage(object):
     action = attr.attrib()
-    subjects = attr.attrib(default=attr.Factory(list))
+    subjects = attr.attrib()
     group = attr.attrib()    
 
 
 @attr.attrs
-class User(object):
-    user_id = attr.attrib()
-    email = attr.attrib()
-
-
-@attr.attrs
-class UserGroup(object):
+class IdentifierPair(object):
+    local_id = attr.attrib()
     remote_id = attr.attrib()
-    handle = attr.attrib()
 
 
 class UnknowActionError(Exception):
@@ -136,7 +131,7 @@ class SlackProvisioner(object):
             self.log = log
             log.info("Initializing provisioner.",
                 event_type='init_provisioner')
-            provider_config = section2dict(scp, i"SLACK")
+            provider_config = section2dict(scp, "SLACK")
             # Load configuration.
             try:
                 self.endpoint_s = config.get("endpoint", None)
@@ -168,6 +163,11 @@ class SlackProvisioner(object):
         self.user_cache_size = int(config["user_cache_size"])
         self.usergroup_cache_size = int(config["usergroup_cache_size"])
         self.groupmap_path = config['groupmap']
+        self.user_id_formatter = jinja2.Template(config['user_id_formatter'])
+        self.users_list = config['users_list']
+        self.usergroups_list = config['usergroups_list']
+        self.usergroups_users_list = config['usergroups_users_list']
+        self.usergroups_users_update = config['usergroups_users_update']
 
     def init_provider(self):
         """
@@ -223,7 +223,7 @@ class SlackProvisioner(object):
         if action in (constants.ACTION_ADD, constants.ACTION_DELETE):
             subject = doc['subject']
             group = doc['group']
-            return ParsedMessage(action, subject)
+            return MembershipMessage(action, subject, group)
         elif action == constants.ACTION_MEMBERSHIP_SYNC:
             subjects = list(doc['subjects'])
             group = doc['group']
@@ -236,7 +236,7 @@ class SlackProvisioner(object):
         log = self.log
         if "warning" in doc:
             log.warn(
-                "Warning in HTTP Response: {{warning}}",
+                "Warning in HTTP Response: {warning}",
                 warning=doc["warning"])
         if not doc["ok"]:
             raise Exception(
@@ -263,7 +263,7 @@ class SlackProvisioner(object):
             'presence': '0'
         }
         try:
-            resp = yield self.make_authenticated_api_call("GET", url, headers=headers, params=params)
+            resp = yield http_client.get(url, headers=headers, params=params)
         except Exception as ex:
             log.error("Error attempting to retrieve users list.")
             raise
@@ -288,10 +288,128 @@ class SlackProvisioner(object):
                 continue
             if "profile" in member:
                 profile = member["profile"]
-                email = profile.get("email")
-                user_id = member["id"]
-                team_members.append(User(user_id, email))
+                email = profile.get("email", None)
+                user_id = member.get("id", None)
+                if email is not None and user_id is not None:
+                    team_members.append(IdentifierPair(email.lower(), user_id))
         returnValue(team_members)
+
+    @inlineCallbacks
+    def fetch_all_usergroups(self):
+        """
+        Load all remote usergroups from the sevice.
+        """
+        log = self.log
+        log.debug("Attempting to fetch all remote usergroup IDs ...")
+        http_client = self.http_client
+        prefix = self.url_prefix
+        url = "{0}{1}".format(prefix, self.usergroups_list)
+        headers = {
+            'Accept': ['application/json'],
+        }
+        log.debug("URL (GET): {url}", url=url)
+        log.debug("headers: {headers}", headers=headers)
+        params = {
+            'token': self.api_key,
+            'include_disabled': '0',
+            'include_count': '0',
+            'include_users': '0'
+        }
+        try:
+            resp = yield http_client.get(url, headers=headers, params=params)
+        except Exception as ex:
+            log.error("Error attempting to retrieve usergroups list.")
+            raise
+        log.debug("HTTP GET complete.  Response code was: {code}", code=resp.code)
+        resp_code = resp.code
+        if resp_code != 200:
+            raise Exception("Invalid response code: {0}".format(resp_code))
+        try:
+            doc = yield resp.json()
+        except Exception as ex:
+            log.error("Error attempting to parse response.")
+            raise
+        log.debug("Received valid JSON response")
+        self.check_response_for_errors(doc)
+        entries = doc["usergroups"]
+        team_id = self.team_id
+        results = []
+        for entry in entries:
+            if entry["team_id"] != team_id:
+                continue
+            remote_id = entry.get("id", None)
+            local_id = entry.get("handle", None)
+            if local_id is not None and remote_id is not None:
+                results.append(IdentifierPair(local_id.lower(), remote_id))
+        returnValue(results)
+
+    @inlineCallbacks
+    def get_remote_id(self, local_id, cache, cache_size, entry_list_func):
+        """
+        Fetch an existing remote ID and return it or None if the remote 
+        entry does not exist.
+        """
+        log = self.log
+        log.debug("Entered get_remote_id().")
+        log.debug("cache max size: {cache_size}", cache_size=cache_size)
+        log.debug("cache current size: {cache_size}", cache_size=len(cache))
+        entries = None
+        if len(cache) == 0: 
+            # Prefill cache.
+            log.debug("Prefilling cache ...")
+            entries = yield entry_list_func()
+            for entry in entries: 
+                if len(cache) >= cache_size:
+                    break
+                cache[entry.local_id] = entry.remote_id
+            log.debug("Cache size after prefill: {cache_size}", cache_size=len(cache))
+        if name in cache:
+            remote_id = cache[local_id]
+            returnValue(remote_id)
+        log.debug("Remote ID not in cache for '{local_id}.", local_id=local_id)
+        if entries is None:
+            entries = yield entry_list_func()
+        for entry in entries:
+            if entry.local_id == local_id:
+                remote_id = entry.remote_id
+                cache[local_id] = remote_id
+                log.debug("Added entry to cache: {local_id}: {remote_id}", local_id=local_id, remote_id=remote_id)
+                returnValue(remote_id)
+        returnValue(None)
+
+    @inlineCallbacks
+    def get_remote_id(self, local_id, cache, cache_size, entry_list_func):
+        """
+        Fetch an existing remote ID and return it or None if the remote 
+        entry does not exist.
+        """
+        log = self.log
+        log.debug("Entered get_remote_id().")
+        log.debug("cache max size: {cache_size}", cache_size=cache_size)
+        log.debug("cache current size: {cache_size}", cache_size=len(cache))
+        entries = None
+        if len(cache) == 0: 
+            # Prefill cache.
+            log.debug("Prefilling cache ...")
+            entries = yield entry_list_func()
+            for entry in entries: 
+                if len(cache) >= cache_size:
+                    break
+                cache[entry.local_id] = entry.remote_id
+            log.debug("Cache size after prefill: {cache_size}", cache_size=len(cache))
+        if local_id in cache:
+            remote_id = cache[local_id]
+            returnValue(remote_id)
+        log.debug("Remote ID not in cache for '{local_id}.", local_id=local_id)
+        if entries is None:
+            entries = yield entry_list_func()
+        for entry in entries:
+            if entry.local_id == local_id:
+                remote_id = entry.remote_id
+                cache[local_id] = remote_id
+                log.debug("Added entry to cache: {local_id}: {remote_id}", local_id=local_id, remote_id=remote_id)
+                returnValue(remote_id)
+        returnValue(None)
 
     @inlineCallbacks
     def get_user_id(self, subject):
@@ -299,74 +417,110 @@ class SlackProvisioner(object):
         Fetch an existing remote account ID and return it or None if the remote 
         account does not exist.
         """
-        log = self.log
-        log.debug("Attempting to fetch existing account.")
-        user_cache = self.__user_cache
+        local_id = self.user_id_formatter.render(subject=subject)
+        cache = self.__user_cache
         cache_size = self.user_cache_size
-        log.debug("cache max size: {cache_size}", cache_size=cache_size)
-        log.debug("cache current size: {cache_size}", cache_size=len(user_cache))
-        members = None
-        if len(user_cache) == 0: 
-            # Prefill cache.
-            log.debug("Prefilling cache ...")
-            members = yield self.fetch_all_users()
-            for entry in members: 
-                if len(user_cache) >= cache_size:
-                    break
-                user_cache[entry.email] = entry.user_id
-            log.debug("Cache size after prefill: {cache_size}", cache_size=len(user_cache))
-        subject = subject.lower()
-        email = "{0}@lafayette.edu".format(subject)
-        if email in user_cache:
-            remote_id = user_cache[email]
-            returnValue(remote_id)
-        log.debug("User ID not in cache for '{subject}.", subject=subject)
-        if members is None:
-            members = yield self.fetch_all_users()
-        for entry in members:
-            log.debug("Looping through entries ...")
-            if entry.email.lower() == email:
-                remote_id = entry.user_id
-                user_cache[email] = remote_id
-                log.debug("Added entry to cache: {email}: {identifier}", email=email, identifier=remote_id)
-                returnValue(remote_id)
-        returnValue(None)
+        entry_list_func = self.fetch_all_users
+        result = yield self. get_remote_id(local_id, cache, cache_size, entry_list_func)
+        returnValue(result)
 
     @inlineCallbacks
-    def get_usergroup_id(self, name):
+    def get_usergroup_id(self, usergroup):
         """
         Fetch an existing remote usergroup ID and return it or None if the remote 
         usergroup does not exist.
         """
-        log = self.log
-        log.debug("Attempting to fetch existing usergroup.")
+        local_id = usergroup.lower()
         cache = self.__usergroup_cache
         cache_size = self.usergroup_cache_size
-        log.debug("cache max size: {cache_size}", cache_size=cache_size)
-        log.debug("cache current size: {cache_size}", cache_size=len(cache))
-        entries = None
-        if len(user_cache) == 0: 
-            # Prefill cache.
-            log.debug("Prefilling cache ...")
-            entries = yield self.fetch_all_usergroups()
-            for entry in account_data: 
-                if len(cache) >= cache_size:
-                    break
-                cache[entry.handle] = entry.remote_id
-            log.debug("Cache size after prefill: {cache_size}", cache_size=len(cache))
-        if name in cache:
-            remote_id = cache[name]
-            returnValue(remote_id)
-        log.debug("UserGroup ID not in cache for '{name}.", name=name)
-        if entries is None:
-            entries = yield self.fetch_all_users()
-        for entry in members:
-            log.debug("Looping through entries ...")
-            if entry.email.lower() == email:
-                remote_id = entry.user_id
-                user_cache[email] = remote_id
-                log.debug("Added entry to cache: {email}: {identifier}", email=email, identifier=remote_id)
-                returnValue(remote_id)
+        entry_list_func = self.fetch_all_usergroups
+        result = yield self. get_remote_id(local_id, cache, cache_size, entry_list_func)
+        returnValue(result)
+
+    @inlineCallbacks
+    def get_usergroup_members(self, remote_id):
+        """
+        Get the remote user IDs that are mebers of the usergroup
+        identifier by `remote_id`.
+        """
+        log = self.log
+        log.debug(
+            "Attempting to fetch members of remote usergroup identified by '{remote_id}' ...",
+            remote_id=remote_id)
+        http_client = self.http_client
+        prefix = self.url_prefix
+        url = "{0}{1}".format(prefix, self.usergroups_users_list)
+        headers = {
+            'Accept': ['application/json'],
+        }
+        log.debug("URL (GET): {url}", url=url)
+        log.debug("headers: {headers}", headers=headers)
+        params = {
+            'token': self.api_key,
+            'usergroup': remote_id,
+            'include_disabled': '0',
+        }
+        try:
+            resp = yield http_client.get(url, headers=headers, params=params)
+        except Exception as ex:
+            log.error("Error attempting to retrieve usergroup members.")
+            raise
+        log.debug("HTTP GET complete.  Response code was: {code}", code=resp.code)
+        resp_code = resp.code
+        if resp_code != 200:
+            raise Exception("Invalid response code: {0}".format(resp_code))
+        try:
+            doc = yield resp.json()
+        except Exception as ex:
+            log.error("Error attempting to parse response.")
+            raise
+        log.debug("Received valid JSON response")
+        self.check_response_for_errors(doc)
+        entries = doc["users"]
+        results = list(entries)
+        returnValue(results)
+
+    @inlineCallbacks
+    def set_usergroup_members(self, remote_id, user_ids):
+        """
+        Set the remote user IDs that are mebers of the usergroup
+        identifier by `remote_id`.
+        `user_ids` is a complete list of user IDs that belong to the usergroup.
+        """
+        log = self.log
+        log.debug(
+            "Attempting to set members of remote usergroup identified by '{remote_id} ...",
+            remote_id=remote_id)
+        http_client = self.http_client
+        prefix = self.url_prefix
+        url = "{0}{1}".format(prefix, self.usergroups_users_update)
+        headers = {
+            'Accept': ['application/json'],
+        }
+        log.debug("URL (GET): {url}", url=url)
+        log.debug("headers: {headers}", headers=headers)
+        params = {
+            'token': self.api_key,
+            'usergroup': remote_id,
+            'users': ','.join(user_ids),
+            'include_count': '0',
+        }
+        try:
+            resp = yield http_client.get(url, headers=headers, params=params)
+        except Exception as ex:
+            log.error("Error attempting to set usergroup members.")
+            raise
+        log.debug("HTTP GET complete.  Response code was: {code}", code=resp.code)
+        resp_code = resp.code
+        if resp_code != 200:
+            raise Exception("Invalid response code: {0}".format(resp_code))
+        try:
+            doc = yield resp.json()
+        except Exception as ex:
+            log.error("Error attempting to parse response.")
+            raise
+        log.debug("Received valid JSON response")
+        self.check_response_for_errors(doc)
         returnValue(None)
 
     @inlineCallbacks
@@ -381,27 +535,27 @@ class SlackProvisioner(object):
         group = msg.group
         if not group in groupmap:
             log.warn(
-                "Group '{{group}}' is not listed in the provider group map.  Discarding.",
+                "Group '{group}' is not listed in the provider group map.  Discarding.",
                 group=group)
             returnValue(None)
         mapped_group = groupmap[group]
         user_id = yield self.get_user_id(subject)
         if user_id is None:
             log.warn(
-                "Subject '{{subject}}' does not exist on the remote end.  Discarding.",
+                "Subject '{subject}' does not exist on the remote end.  Discarding.",
                 subject=subject) 
             returnValue(None)
         usergroup_id = yield self.get_usergroup_id(mapped_group)
         if usergroup_id is None:
             log.warn(
-                "UserGroup '{{group}}' does not exist on the remote end.  Discarding.",
+                "UserGroup '{group}' does not exist on the remote end.  Discarding.",
                 group=mapped_group) 
             returnValue(None)
         members = yield self.get_usergroup_members(usergroup_id)
         mset = set(members)
         if user_id in mset:
             log.debug(
-                "Subject '{{subject}}' already a member of '{{group}}'.",
+                "Subject '{subject}' already a member of '{group}'.",
                 subject=subject,
                 group=mapped_group)
             returnValue(None)
@@ -410,139 +564,80 @@ class SlackProvisioner(object):
         yield self.set_usergroup_members(usergroup_id, members) 
         returnValue(None)
 
-
-
     @inlineCallbacks
-    def update_subject(self, remote_id, msg):
+    def remove_member(self, msg):
         """
-        Update a remote account.
+        Remove a member from a usergroup.
         """
         log = self.log
-        log.debug("Entered update_subject().")
+        log.debug("Entered remove_member().")
         subject = msg.subject
-        log.debug("Updating subject '{subject}'", subject=subject)
-        attributes = msg.attributes
-        props = self.map_attributes(attributes, subject, msg.action)
-        props['active'] = '1'
-        prefix = self.url_prefix
-        url = "{0}{1}".format(
-            prefix,
-            self.account_update.render(
-                remote_id=remote_id,
-                subject=msg.subject,
-                attributes=props))
-        headers = {'Accept': ['application/json']}
-        log.debug("url: {url}", url=url)
-        log.debug("headers: {headers}", headers=headers)
-        log.debug("data: {props}", props=props)
-        if not self.diagnostic_mode:
-            try:
-                resp = yield self.make_authenticated_api_call(
-                    'PUT',  
-                    url, 
-                    data=props, 
-                    headers=headers)
-            except Exception as ex:
-                log.error("Error attempting to update existing account.")
-                raise
-            resp_code = resp.code
-            log.debug("Response code: {code}", code=resp_code)
-            yield resp.content()
-
-    @inlineCallbacks
-    def add_subject(self, msg):
-        """
-        Add a remote service account.
-        """
-        log = self.log
-        log.debug("Entered add_subject().")
-        subject = msg.subject.lower()
-        action = msg.action
-        log.debug("Adding a new account ...")
-        attributes = msg.attributes
-        props = self.map_attributes(attributes, subject, action)
-        props['active'] = '1'
-        account_doc = self.account_template.render(
-            props=props,
-            subject=subject,
-            action=action)
-        log.debug("Account doc: {doc}", doc=account_doc)
-        prefix = self.url_prefix
-        url = "{0}{1}".format(
-            prefix,
-            self.account_add)
-        headers = {
-            'Accept': ['application/json'], 
-            'Content-Type': ['application/json']}
-        log.debug("url: {url}", url=url)
-        log.debug("headers: {headers}", headers=headers)
-        log.debug("data: {account_doc}", account_doc=account_doc)
-        if not self.diagnostic_mode:
-            try:
-                resp = yield self.make_authenticated_api_call(
-                    'POST',
-                    url, 
-                    data=StringProducer(account_doc.encode('utf-8')), 
-                    headers=headers) 
-            except Exception as ex:
-                log.error("Error attempting to add new account.")
-                raise
-            resp_code = resp.code
-            log.debug("Response code: {code}", code=resp_code)
-            doc = yield resp.json()
-            remote_id = doc["id"]
-            self.__user_cache[subject.lower()] = remote_id
-
-    @inlineCallbacks
-    def deprovision_subject(self, msg):
-        """
-        Deprovision a subject from the remote service.
-        """
-        log = self.log
-        log.debug("Entered deprovision_subject().")
-        subject = msg.subject.lower()
-        log.debug(
-            "Attempting to deprovision subject '{subject}'.",
-            subject=subject)
-        remote_id = yield self.fetch_account_id(msg)
-        if remote_id is None:
-            log.debug("Account '{subject}' does not exist on the remote service.",
-                subject=subject)
+        groupmap = self.groupmap
+        group = msg.group
+        if not group in groupmap:
+            log.warn(
+                "Group '{group}' is not listed in the provider group map.  Discarding.",
+                group=group)
             returnValue(None)
-        prefix = self.url_prefix
-        url = "{0}{1}".format(
-            prefix,
-            self.account_delete.render(remote_id=remote_id))
-        headers = {
-            'Accept': ['application/json']}
-        log.debug("url: {url}", url=url)
-        log.debug("headers: {headers}", headers=headers)
-        data = {'active': '0'}
-        if not self.diagnostic_mode:
-            try:
-                resp = yield self.make_authenticated_api_call(
-                    'PUT',
-                    url, 
-                    headers=headers,
-                    data=data)
-            except Exception as ex:
-                log.error(
-                    "Error attempting to delete existing account.  subject: {subject}",
-                    subject=subject
-                )
-                raise
-            resp_code = resp.code
-            log.debug("Response code: {code}", code=resp_code)
-            content = yield resp.content()
-            if resp_code != 200:
-                log.error(
-                    "API error attempting to delete subject {subject}:\n{content}",
-                    subject=subject,
-                    content=content)
-                raise Exception("API error attempting to delete remote subject.")
-            user_cache = self.__user_cache
-            if subject in user_cache:
-                del user_cache[subject]
+        mapped_group = groupmap[group]
+        user_id = yield self.get_user_id(subject)
+        if user_id is None:
+            log.warn(
+                "Subject '{subject}' does not exist on the remote end.  Discarding.",
+                subject=subject) 
+            returnValue(None)
+        usergroup_id = yield self.get_usergroup_id(mapped_group)
+        if usergroup_id is None:
+            log.warn(
+                "UserGroup '{group}' does not exist on the remote end.  Discarding.",
+                group=mapped_group) 
+            returnValue(None)
+        members = yield self.get_usergroup_members(usergroup_id)
+        mset = set(members)
+        if user_id not in mset:
+            log.debug(
+                "Subject '{subject}' already isn't a member of '{group}'.",
+                subject=subject,
+                group=mapped_group)
+            returnValue(None)
+        mset.discard(user_id)
+        members = list(mset)
+        yield self.set_usergroup_members(usergroup_id, members) 
+        returnValue(None)
+
+    @inlineCallbacks
+    def sync_membership(self, msg):
+        """
+        Sync a usergroup's membership to an exact list of users.
+        """
+        log = self.log
+        log.debug("Entered sync_membership().")
+        subjects = msg.subjects
+        groupmap = self.groupmap
+        group = msg.group
+        if not group in groupmap:
+            log.warn(
+                "Group '{group}' is not listed in the provider group map.  Discarding.",
+                group=group)
+            returnValue(None)
+        mapped_group = groupmap[group]
+        usergroup_id = yield self.get_usergroup_id(mapped_group)
+        if usergroup_id is None:
+            log.warn(
+                "UserGroup '{group}' does not exist on the remote end.  Discarding.",
+                group=mapped_group) 
+            returnValue(None)
+        user_ids = []
+        for subject in subjects:
+            user_id = yield self.get_user_id(subject)
+            if user_id is None:
+                log.warn(
+                    "Subject '{subject}' does not exist on the remote end.  Discarding.",
+                    subject=subject) 
+            else:
+                user_ids.append(user_id)
+        yield self.set_usergroup_members(usergroup_id, user_ids) 
+        returnValue(None)
 
     def make_web_agent(self):
         """

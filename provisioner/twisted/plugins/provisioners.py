@@ -14,3 +14,6 @@ ssh_provisioner_factory = SSHProvisionerFactory()
 from txgroupprovisioner.board_effect_provisioner import BoardEffectProvisionerFactory
 board_effect_provisioner_factory = BoardEffectProvisionerFactory()
 
+from txgroupprovisioner.slack_provisioner import SlackProvisionerFactory
+slack_provisioner_factory = SlackProvisionerFactory()
+
