@@ -369,7 +369,8 @@ class BoardEffectProvisioner(object):
             account_data = doc["data"]
         for entry in account_data:
             log.debug("Looping through entries ...")
-            if entry["login"].lower() == subject:
+            login = entry["login"].lower()
+            if login == subject:
                 remote_id = entry["id"]
                 account_cache[subject] = remote_id
                 log.debug("Added entry to cache: {login}: {identifier}", login=login, identifier=remote_id)
