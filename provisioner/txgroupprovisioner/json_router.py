@@ -55,6 +55,7 @@ class JSONRouter(object):
                 "name": "OrgSync",
                 "stem": "lc:app:orgsync:exports",
                 "include_attributes": true,
+                "allow_actions": ["add", "delete", "update"],
                 "route_key": "orgsync"
             },
             {
@@ -72,9 +73,11 @@ class JSONRouter(object):
         """
         Create the internal routing map from the JSON representiation.
         """
+        log = self.log
         routes = []
         for n, entry in enumerate(doc):
-            routes.append(RouteEntry(n, entry))
+            route_entry = RouteEntry(n, entry)
+            routes.append(route_entry)
         self.routes = routes
 
     def get_route(self, instructions, groups):
@@ -85,13 +88,15 @@ class JSONRouter(object):
         map to None.
         """
         log = self.log
+        action = instructions.action
         routes = self.routes
         route_keys = []
         attributes_required = False
         for group in groups:
             matched = False
             for route in routes:
-                if route.match(group):
+                route.log = self.log
+                if route.match(group, action):
                     matched = True
                     if route.discard:
                         log.debug(
@@ -125,6 +130,8 @@ class JSONRouter(object):
 
 
 class RouteEntry(object):
+    log = None
+
     def __init__(self, n, props):
         self.index = n + 1
         if "group" in props and "stem" in props:
@@ -139,6 +146,10 @@ class RouteEntry(object):
             raise JSONRouteEntryError(msg)
         self.group = props.get("group", None)
         self.stem = props.get("stem", None)
+        if "allowed_actions" in props:
+            self.allowed_actions = set(action.lower() for action in props["allowed_actions"])
+        else:
+            self.allowed_actions = None
         if self.stem is not None and not self.stem.endswith(":"):
             self.stem = "{0}:".format(self.stem)
         if self.stem is None and "recursive" in props:
@@ -166,18 +177,32 @@ class RouteEntry(object):
                 "in route entry number {0}.").format(n+1)
             raise JSONRouteEntryError(msg)
 
-    def match(self, group):
+    def match(self, group, action):
         """
         Return True if the group matches the entry; False otherwise.
         """
+        log = self.log
+        allowed_actions = self.allowed_actions
+        log.debug(
+            "Testing route for group '{group}', action '{action}'",
+            group=group, 
+            action=action)
+        log.debug(
+            "Route group: '{group}', stem: '{stem}', allowed_actions: {allowed_actions}",
+            group=self.group,
+            stem=self.stem,
+            allowed_actions=allowed_actions)
         if self.group == group or self.group == "*":
-            return True
+            if (allowed_actions is None) or action.lower() in allowed_actions:
+                return True
         elif self.stem is not None and group.startswith(self.stem):
             if self.recursive:
-                return True
+                if (allowed_actions is None) or action.lower() in allowed_actions:
+                    return True
             suffix = group[len(self.stem):]
             if ":" not in suffix:
-                return True
+                if (allowed_actions is None) or action.lower() in allowed_actions:
+                    return True
         return False
 
 
