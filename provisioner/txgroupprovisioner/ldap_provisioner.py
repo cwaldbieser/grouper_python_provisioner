@@ -371,6 +371,8 @@ class LDAPProvisioner(object):
         subject_set = set(s.lower() for s in subjects)
         for subject_entry in results:
             subject_id = [x for x in subject_entry.get(subject_id_attribute, [None])][0]
+            if subject_id is not None:
+                subject_id = subject_id.lower()
             if subject_id not in subject_set:
                 if multi_valued:
                     values = subject_entry.get(attrib_name, [])
