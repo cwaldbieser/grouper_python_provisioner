@@ -287,6 +287,8 @@ class BoardEffectProvisioner(object):
                 self.__auth_token = data["token"]
                 auth_token =  self.__auth_token
             else:
+                if resp_code == 401:
+                    self.__auth_token = None
                 content = yield response.content()
                 raise Exception(
                     "Could not obtain auth token.  Response ({code}) was:\n{content}".format(
