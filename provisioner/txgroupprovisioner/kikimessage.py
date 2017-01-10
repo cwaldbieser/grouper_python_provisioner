@@ -139,7 +139,7 @@ class BasicFullSyncMsg(BaseMsg):
         """
         return defer.succeed([self.group])    
 
-
+    @defer.inlineCallbacks
     def resolve_attributes(self, resolver):
         """
         Returns a Deferred that fires when attributes have been resolved
@@ -147,13 +147,11 @@ class BasicFullSyncMsg(BaseMsg):
         and serialized later is up to the message class.  The resulting
         message should be understood by downstream provisioners.
         """
-        msg = (
-            "The `BasicFullSyncMsg` message format is not capable of "
-            "providing fully resolved subjects to downstream provisioners.  "
-            "It is intended to providing complete subject ID memberships to "
-            "downstream membership provisioners for a single group."
-        )
-        return defer.fail(Exception(msg))
-
-
-
+        subjects = self.subjects
+        attrib_map = {}
+        for subject in subjects:
+            subject = subject.lower()
+            attributes = yield resolver.resolve_attributes(subject)
+            attrib_map[subject] = dict(attributes)
+        self.attributes = attrib_map
+        returnValue(None)

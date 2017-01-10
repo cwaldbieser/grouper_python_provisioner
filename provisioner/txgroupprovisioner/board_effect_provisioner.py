@@ -40,10 +40,17 @@ from utils import get_plugin_factory
 
 
 @attr.attrs
-class ParsedMessage(object):
+class ParsedSubjectMessage(object):
     action = attr.attrib()
     subject = attr.attrib()
-    attributes = attr.attrib(default=attr.Factory(list))
+    attributes = attr.attrib(default=attr.Factory(dict))
+
+
+@attr.attrs
+class ParsedSyncMessage(object):
+    action = attr.attrib()
+    subjects = attr.attrib(default=attr.Factory(list))
+    attributes = attr.attrib(default=attr.Factory(dict))
 
 
 class UnknowActionError(Exception):
@@ -132,6 +139,9 @@ class BoardEffectProvisioner(object):
                 self.account_add = config['account_add']
                 account_template_path = config['account_template']
                 attrib_map_path = config["attribute_map"]
+                self.unmanaged_logins = set(
+                    login.lower() 
+                        for login in config.get("unmanaged_logins", "").split())
             except KeyError as ex:
                 raise OptionMissingError(
                     "A require option was missing: '{0}:{1}'.".format(
@@ -188,6 +198,8 @@ class BoardEffectProvisioner(object):
                 yield self.provision_subject(msg)
             elif msg.action == constants.ACTION_DELETE:
                 yield self.deprovision_subject(msg)
+            elif msg.action == constants.ACTION_MEMBERSHIP_SYNC:
+                yield self.sync_members(msg)
             else:
                 raise UnknownActionError(
                     "Don't know how to handle action '{0}'.".format(msg.action))
@@ -210,11 +222,20 @@ class BoardEffectProvisioner(object):
         serialized = msg.content.body
         doc = json.loads(serialized)
         action = doc['action']
-        subject = doc['subject']
-        attributes = None
-        if action  != constants.ACTION_DELETE:
+        single_subject_actions = (
+            constants.ACTION_ADD,
+            constants.ACTION_DELETE,
+            constants.ACTION_UPDATE)
+        if action in single_subject_actions:
+            subject = doc['subject']
+            attributes = None
+            if action  != constants.ACTION_DELETE:
+                attributes = doc['attributes']
+            return ParsedSubjectMessage(action, subject, attributes)
+        elif action == constants.ACTION_MEMBERSHIP_SYNC:
+            subjects = doc['subjects']
             attributes = doc['attributes']
-        return ParsedMessage(action, subject, attributes)
+            return ParsedSyncMessage(action, subjects, attributes)
 
     def map_attributes(self, attribs, subject, action):
         """
@@ -231,6 +252,36 @@ class BoardEffectProvisioner(object):
             if value != u'\x00':
                 props[prop_name] = value
         return props
+
+    @inlineCallbacks
+    def sync_members(self, msg):
+        """
+        Sync all subects to Board Effect accounts.
+        (Except non-SSO accounts).
+        """
+        unmanaged_logins = self.unmanaged_logins
+        subjects = msg.subjects
+        attrib_map = msg.attributes
+        for subject in subjects:
+            subject = subject.lower()
+            if subject in unmanaged_logins:
+                continue
+            attributes = attrib_map[subject]
+            generated_msg = ParsedSubjectMessage(constants.ACTION_ADD, subject, attributes)
+            yield self.provision_subject(generated_msg)
+        subject_set = set(subject.lower() for subject in subjects)
+        doc = yield self.fetch_all_users()
+        account_data = doc["data"]
+        for entry in account_data:
+            active = entry["active"]
+            if active == 0:
+                continue
+            login = entry["login"].lower()
+            if login in unmanaged_logins:
+                continue
+            if not login in subject_set:
+                generated_msg = ParsedSubjectMessage(constants.ACTION_DELETE, subject, None)
+                yield self.deprovision_subject(generated_msg) 
 
     @inlineCallbacks
     def provision_subject(self, msg):
