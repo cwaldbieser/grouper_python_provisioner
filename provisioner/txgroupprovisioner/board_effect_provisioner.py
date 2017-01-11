@@ -280,7 +280,7 @@ class BoardEffectProvisioner(object):
             if login in unmanaged_logins:
                 continue
             if not login in subject_set:
-                generated_msg = ParsedSubjectMessage(constants.ACTION_DELETE, subject, None)
+                generated_msg = ParsedSubjectMessage(constants.ACTION_DELETE, login, None)
                 yield self.deprovision_subject(generated_msg) 
 
     @inlineCallbacks

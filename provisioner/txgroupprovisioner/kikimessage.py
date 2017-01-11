@@ -154,4 +154,3 @@ class BasicFullSyncMsg(BaseMsg):
             attributes = yield resolver.resolve_attributes(subject)
             attrib_map[subject] = dict(attributes)
         self.attributes = attrib_map
-        returnValue(None)
