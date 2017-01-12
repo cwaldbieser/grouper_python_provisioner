@@ -53,6 +53,13 @@ class ParsedSyncMessage(object):
     attributes = attr.attrib(default=attr.Factory(dict))
 
 
+@attr.attrs
+class ParsedWorkroomMessage(object):
+    action = attr.attrib()
+    subject = attr.attrib()
+    group = attr.attrib()
+
+
 class UnknowActionError(Exception):
     pass
 
@@ -128,30 +135,51 @@ class BoardEffectProvisioner(object):
             # Load API configuration info-- endpoint info, URL, API key.
             try:
                 self.diagnostic_mode = bool(int(config.get("diagnostic_mode", 0)))
+                self.unmanaged_logins = set(
+                    login.lower() 
+                        for login in config.get("unmanaged_logins", "").split())
+                self.provision_group = config.get("provision_group", None)
+                if self.provision_group is not None:
+                    self.provision_group = self.provision_group.lower()
+                workroom_map_path = config.get("workroom_map", None)
                 self.endpoint_s = config.get("endpoint", None)
                 self.url_prefix = config["url_prefix"]
                 self.api_key = config["api_key"]
                 self.cache_size = int(config["cache_size"])
                 self.authenticate = config['authenticate']
                 self.accounts_query = config['accounts_query']
-                self.account_update = jinja2.Template(config['account_update'])
-                self.account_delete = jinja2.Template(config['account_delete'])
-                self.account_add = config['account_add']
-                account_template_path = config['account_template']
-                attrib_map_path = config["attribute_map"]
-                self.unmanaged_logins = set(
-                    login.lower() 
-                        for login in config.get("unmanaged_logins", "").split())
+                if self.provision_group:
+                    self.account_update = jinja2.Template(config['account_update'])
+                    self.account_delete = jinja2.Template(config['account_delete'])
+                    self.account_add = config['account_add']
+                    account_template_path = config['account_template']
+                    attrib_map_path = config["attribute_map"]
+                if workroom_map_path:
+                    self.workrooms_query = config['workrooms_query']
+                    self.workroom_subject = jinja2.Template(config['workroom_subject'])
+                    self.workroom_cache_size = int(config.get("workroom_cache_size", 100))
+                    self.workroom_retry_delay = int(config.get("workroom_retry_delay", 20))
             except KeyError as ex:
                 raise OptionMissingError(
                     "A require option was missing: '{0}:{1}'.".format(
                         section, ex.args[0]))
+            if self.provision_group is None and workroom_map_path is None:
+                raise OptionMissingError(
+                    "Must provide at least one of `provision_group` (account "
+                    "provisioning) or `workroom_map` (workroom mapping).")
             # Create the web client.
             self.make_web_client()
-            # Create the attribute map.
-            self.make_attribute_map(attrib_map_path)
-            # Create the account template.
-            self.make_account_template(account_template_path)
+            self.__workroom_cache = None
+            if self.provision_group:
+                # Create the attribute map.
+                self.make_attribute_map(attrib_map_path)
+                # Create the account template.
+                self.make_account_template(account_template_path)
+            if workroom_map_path:
+                # Create the workroom map.
+                self.make_workroom_map(workroom_map_path)
+                # Create the workroom cache.
+                self.__workroom_cache = pylru.lrucache(self.workroom_cache_size)
             # Create account cache.
             self.__account_cache = pylru.lrucache(self.cache_size)
             # Initialize access token.
@@ -162,6 +190,20 @@ class BoardEffectProvisioner(object):
             log.failure("Provisioner failed to initialize: {0}".format(ex))
             raise
         return defer.succeed(None)
+
+    def make_workroom_map(self, workroom_map_path):
+        """
+        Create group to workroom mappings from JSON
+        file.
+        """
+        log = self.log
+        if workroom_map_path is None:
+            log.info("No workroom map.  Permissions will not be mapped.")
+            self.workroom_map = {}
+            return
+        with open(workroom_map_path, "r") as f:
+            self.workroom_map = commentjson.load(f)
+        log.info("Created group to workroom map.")
 
     def make_attribute_map(self, path):
         log = self.log
@@ -188,21 +230,45 @@ class BoardEffectProvisioner(object):
         Provision an entry based on an AMQP message.  
         """                                              
         log = self.log
+        workroom_map = self.workroom_map
         try:
             msg = self.parse_message(amqp_message)
         except Exception as ex:
             log.warn("Error parsing message: {error}", error=ex)
             raise
         try:
-            if msg.action in (constants.ACTION_ADD, constants.ACTION_UPDATE):
-                yield self.provision_subject(msg)
-            elif msg.action == constants.ACTION_DELETE:
-                yield self.deprovision_subject(msg)
-            elif msg.action == constants.ACTION_MEMBERSHIP_SYNC:
-                yield self.sync_members(msg)
+            group = msg.group.lower()
+            workroom = workroom_map.get(group, None)
+            if group == self.provision_group:
+                if workroom is not None:
+                    log.warn(
+                        "Group '{group}' is the account provisioning group AND in the workroom map."
+                        "  It will NEVER be used for workroom mapping.",
+                        group=group)
+                if msg.action in (constants.ACTION_ADD, constants.ACTION_UPDATE):
+                    yield self.provision_subject(msg)
+                elif msg.action == constants.ACTION_DELETE:
+                    yield self.deprovision_subject(msg)
+                elif msg.action == constants.ACTION_MEMBERSHIP_SYNC:
+                    yield self.sync_members(msg)
+                else:
+                    raise UnknownActionError(
+                        "Don't know how to handle action '{0}' for provisioning.".format(msg.action))
+            elif workroom is not None:
+                workroom = workroom.lower()
+                if msg.action == constants.ACTION_ADD:
+                    yield self.add_subject_to_workroom(msg, workroom)    
+                elif msg.action == constants.ACTION_DELETE:
+                    yield self.remove_subject_from_workroom(msg, workroom)
+                elif msg.action == constants.ACTION_MEMBERSHIP_SYNC:
+                    yield self.sync_subjects_to_workroom(msg, workroom)
+                else:
+                    raise UnknownActionError(
+                        "Don't know how to handle action '{0}' for workrooms.".format(msg.action))
             else:
-                raise UnknownActionError(
-                    "Don't know how to handle action '{0}'.".format(msg.action))
+                log.warn(
+                    "Not sure what to do with group '{group}'.  Discarding ...",
+                    group=group)
         except Exception as ex:
             log.warn("Error provisioning message: {error}", error=ex)
             raise
@@ -219,23 +285,32 @@ class BoardEffectProvisioner(object):
         """
         Parse message into a standard form.
         """
+        log = self.log
+        provision_group = self.provision_group
         serialized = msg.content.body
         doc = json.loads(serialized)
         action = doc['action']
+        group = doc['group'].lower()
         single_subject_actions = (
             constants.ACTION_ADD,
             constants.ACTION_DELETE,
             constants.ACTION_UPDATE)
-        if action in single_subject_actions:
-            subject = doc['subject']
-            attributes = None
-            if action  != constants.ACTION_DELETE:
+        if group == provision_group:
+            if action in single_subject_actions:
+                subject = doc['subject']
+                attributes = None
+                if action  != constants.ACTION_DELETE:
+                    attributes = doc['attributes']
+                return ParsedSubjectMessage(action, subject, attributes)
+            elif action == constants.ACTION_MEMBERSHIP_SYNC:
+                subjects = doc['subjects']
                 attributes = doc['attributes']
-            return ParsedSubjectMessage(action, subject, attributes)
-        elif action == constants.ACTION_MEMBERSHIP_SYNC:
-            subjects = doc['subjects']
-            attributes = doc['attributes']
-            return ParsedSyncMessage(action, subjects, attributes)
+                return ParsedSyncMessage(action, subjects, attributes)
+        else:
+            if action in single_subject_actions:
+                subject = doc["subject"]
+                return ParsedWorkroomMessage(action, subject, group)
+        raise Exception("Could not parse message: {0}".format(msg))
 
     def map_attributes(self, attribs, subject, action):
         """
@@ -259,6 +334,7 @@ class BoardEffectProvisioner(object):
         Sync all subects to Board Effect accounts.
         (Except non-SSO accounts).
         """
+        log = self.log
         unmanaged_logins = self.unmanaged_logins
         subjects = msg.subjects
         attrib_map = msg.attributes
@@ -354,6 +430,200 @@ class BoardEffectProvisioner(object):
         log.debug("API call complete.  Response code: {code}", code=response.code)
         returnValue(response)
 
+    @inlineCallbacks
+    def fetch_all_workrooms(self):
+        """
+        Load all workrooms from the sevice.
+        """
+        log = self.log
+        log.debug("Attempting to fetch all workroom IDs ...")
+        http_client = self.http_client
+        prefix = self.url_prefix
+        url = "{0}{1}".format(prefix, self.workrooms_query)
+        headers = {
+            'Accept': ['application/json'],
+        }
+        log.debug("URL (GET): {url}", url=url)
+        log.debug("headers: {headers}", headers=headers)
+        try:
+            resp = yield self.make_authenticated_api_call("GET", url, headers=headers)
+        except Exception as ex:
+            log.error("Error attempting to retrieve existing workrooms.")
+            raise
+        log.debug("HTTP GET complete.  Response code was: {code}", code=resp.code)
+        resp_code = resp.code
+        if resp_code != 200:
+            raise Exception("Invalid response code: {0}".format(resp_code))
+        try:
+            doc = yield resp.json()
+        except Exception as ex:
+            log.error("Error attempting to parse response.")
+            raise
+        log.debug("Received valid JSON response")
+        returnValue(doc)
+    
+    @inlineCallbacks
+    def fetch_workroom_id(self, workroom):
+        """
+        Fetch an existing remote workroom ID and return it or None if the remote 
+        account does not exist.
+        """
+        log = self.log
+        workroom = workroom.lower()
+        log.debug("Attempting to fetch existing workroom.")
+        workroom_cache = self.__workroom_cache
+        cache_size = self.cache_size
+        log.debug("cache max size: {cache_size}", cache_size=cache_size)
+        log.debug("cache current size: {cache_size}", cache_size=len(workroom_cache))
+        workroom_data = None
+        if len(workroom_cache) == 0: 
+            # Prefill cache.
+            log.debug("Prefilling workroom cache ...")
+            doc = yield self.fetch_all_workrooms()
+            workroom_data = doc["data"]
+            for entry in workroom_data: 
+                if len(workroom_cache) >= cache_size:
+                    break
+                name = entry["name"].lower()
+                identifier = entry["id"]
+                workroom_cache[name] = identifier 
+            log.debug("Cache size after prefill: {cache_size}", cache_size=len(workroom_cache))
+        if workroom in workroom_cache:
+            workroom_id = workroom_cache[workroom]
+            returnValue(workroom_id)
+        log.debug("Workroom ID not in cache for '{workroom}.", workroom=workroom)
+        if workroom_data is None:
+            doc = yield self.fetch_all_workrooms()
+            workroom_data = doc["data"]
+        for entry in workroom_data:
+            log.debug("Looping through entries ...")
+            name = entry["name"].lower()
+            if name == workroom:
+                workroom_id = entry["id"]
+                workroom_cache[workroom] = workroom_id
+                log.debug(
+                    "Added entry to workroom cache: {name}: {identifier}", 
+                    name=workroom, 
+                    identifier=workroom_id)
+                returnValue(workroom_id)
+        returnValue(None)
+    
+    @inlineCallbacks
+    def add_subject_to_workroom(self, msg, workroom):
+        """
+        Add a subject to a workroom.
+        """
+        log = self.log
+        workroom_id = yield self.fetch_workroom_id(workroom)
+        if workroom_id is None:
+            log.warn(
+                "Unable to find workroom ID for '{workroom}'.  Discarding ...",
+                workroom=workroom)
+            returnValue(None)
+        subject_id = yield self.fetch_account_id(msg)
+        if subject_id is None:
+            yield delay(self.reactor, self.workroom_retry_delay) 
+            subject_id = yield self.fetch_account_id(msg)
+            if subject_id is None:
+                log.warn(
+                    "Unable to find remote_id for subject '{subject}'.  Discarding ...",
+                    subject=msg.subject)
+                returnValue(None)
+        prefix = self.url_prefix
+        url = "{0}{1}".format(
+            prefix,
+            self.workroom_subject.render(
+                workroom_id=workroom_id,
+                subject_id=subject_id))
+        headers = {'Accept': ['application/json']}
+        log.debug("url: {url}", url=url)
+        log.debug("headers: {headers}", headers=headers)
+        if not self.diagnostic_mode:
+            try:
+                resp = yield self.make_authenticated_api_call(
+                    'PUT',  
+                    url, 
+                    headers=headers)
+            except Exception as ex:
+                log.error("Error attempting to update existing account.")
+                raise
+            resp_code = resp.code
+            log.debug("Response code: {code}", code=resp_code)
+            if resp_code == 200:
+                yield resp.content()
+                returnValue(None)
+            try:
+                doc = yield resp.json()
+                error = doc["error"]["message"]
+            except Exception as ex:
+                raise Exception(
+                    "Unknown error prevented adding subject '{0}' to workroom '{1}'.".format(
+                    msg.subject,
+                    workroom))
+            raise Exception(
+                "Error adding subject '{0}' to workroom '{1}': {2}".format(
+                msg.subject,
+                workroom,
+                error))
+
+    @inlineCallbacks
+    def remove_subject_from_workroom(self, msg, workroom):
+        """
+        Remove a subject from a workroom.
+        """
+        log = self.log
+        workroom_id = yield self.fetch_workroom_id(workroom)
+        if workroom_id is None:
+            log.warn(
+                "Unable to find workroom ID for '{workroom}'.  Discarding ...",
+                workroom=workroom)
+            returnValue(None)
+        subject_id = yield self.fetch_account_id(msg)
+        if subject_id is None:
+            yield delay(self.reactor, self.workroom_retry_delay) 
+            subject_id = yield self.fetch_account_id(msg)
+            if subject_id is None:
+                log.warn(
+                    "Unable to find remote_id for subject '{subject}'.  Discarding ...",
+                    subject=msg.subject)
+                returnValue(None)
+        prefix = self.url_prefix
+        url = "{0}{1}".format(
+            prefix,
+            self.workroom_subject.render(
+                workroom_id=workroom_id,
+                subject_id=subject_id))
+        headers = {'Accept': ['application/json']}
+        log.debug("url: {url}", url=url)
+        log.debug("headers: {headers}", headers=headers)
+        if not self.diagnostic_mode:
+            try:
+                resp = yield self.make_authenticated_api_call(
+                    'DELETE',  
+                    url, 
+                    headers=headers)
+            except Exception as ex:
+                log.error("Error attempting to update existing account.")
+                raise
+            resp_code = resp.code
+            log.debug("Response code: {code}", code=resp_code)
+            if resp_code in (204, 404):
+                yield resp.content()
+                returnValue(None)
+            try:
+                doc = yield resp.json()
+                error = doc["error"]["message"]
+            except Exception as ex:
+                raise Exception(
+                    "Unknown error prevented removing subject '{0}' from workroom '{1}'.".format(
+                    msg.subject,
+                    workroom))
+            raise Exception(
+                "Error removing subject '{0}' from workroom '{1}': {2}".format(
+                msg.subject,
+                workroom,
+                error))
+        
     @inlineCallbacks
     def fetch_all_users(self):
         """
@@ -575,4 +845,12 @@ class BoardEffectProvisioner(object):
     def make_web_client(self):
         self.make_web_agent()
         self.http_client = treq.client.HTTPClient(self.agent)
+
+
+@inlineCallbacks
+def delay(reactor, seconds):
+    """
+    A Deferred that fires after `seconds` seconds.
+    """
+    yield task.deferLater(reactor, seconds, lambda : None)
 
