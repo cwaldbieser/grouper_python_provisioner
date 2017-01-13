@@ -6,6 +6,7 @@ import json
 import commentjson
 import jinja2 
 from textwrap import dedent
+import traceback
 import attr
 import pylru
 import treq
@@ -42,6 +43,7 @@ from utils import get_plugin_factory
 @attr.attrs
 class ParsedSubjectMessage(object):
     action = attr.attrib()
+    group = attr.attrib()
     subject = attr.attrib()
     attributes = attr.attrib(default=attr.Factory(dict))
 
@@ -49,6 +51,7 @@ class ParsedSubjectMessage(object):
 @attr.attrs
 class ParsedSyncMessage(object):
     action = attr.attrib()
+    group = attr.attrib()
     subjects = attr.attrib(default=attr.Factory(list))
     attributes = attr.attrib(default=attr.Factory(dict))
 
@@ -56,15 +59,15 @@ class ParsedSyncMessage(object):
 @attr.attrs
 class ParsedWorkroomMessage(object):
     action = attr.attrib()
-    subject = attr.attrib()
     group = attr.attrib()
+    subject = attr.attrib()
 
 
 @attr.attrs
 class ParsedSyncWorkroomMessage(object):
     action = attr.attrib()
-    subjects = attr.attrib()
     group = attr.attrib()
+    subjects = attr.attrib()
 
 
 class UnknowActionError(Exception):
@@ -241,10 +244,6 @@ class BoardEffectProvisioner(object):
         workroom_map = self.workroom_map
         try:
             msg = self.parse_message(amqp_message)
-        except Exception as ex:
-            log.warn("Error parsing message: {error}", error=ex)
-            raise
-        try:
             group = msg.group.lower()
             workroom = workroom_map.get(group, None)
             if group == self.provision_group:
@@ -254,22 +253,22 @@ class BoardEffectProvisioner(object):
                         "  It will NEVER be used for workroom mapping.",
                         group=group)
                 if msg.action in (constants.ACTION_ADD, constants.ACTION_UPDATE):
-                    yield self.provision_subject(msg)
+                    yield self.provision_subject(msg.subject, msg.attributes)
                 elif msg.action == constants.ACTION_DELETE:
-                    yield self.deprovision_subject(msg)
+                    yield self.deprovision_subject(msg.subject)
                 elif msg.action == constants.ACTION_MEMBERSHIP_SYNC:
-                    yield self.sync_members(msg)
+                    yield self.sync_members(msg.subjects, msg.attributes)
                 else:
                     raise UnknownActionError(
                         "Don't know how to handle action '{0}' for provisioning.".format(msg.action))
             elif workroom is not None:
                 workroom = workroom.lower()
                 if msg.action == constants.ACTION_ADD:
-                    yield self.add_subject_to_workroom(msg, workroom)    
+                    yield self.add_subject_to_workroom(workroom, msg.subject)    
                 elif msg.action == constants.ACTION_DELETE:
-                    yield self.remove_subject_from_workroom(msg, workroom)
+                    yield self.remove_subject_from_workroom(workroom, msg.subject)
                 elif msg.action == constants.ACTION_MEMBERSHIP_SYNC:
-                    yield self.sync_subjects_to_workroom(msg, workroom)
+                    yield self.sync_subjects_to_workroom(workroom, msg.subjects)
                 else:
                     raise UnknownActionError(
                         "Don't know how to handle action '{0}' for workrooms.".format(msg.action))
@@ -279,6 +278,8 @@ class BoardEffectProvisioner(object):
                     group=group)
         except Exception as ex:
             log.warn("Error provisioning message: {error}", error=ex)
+            tb = traceback.format_exc()
+            log.debug("{traceback}", traceback=tb)
             raise
 
     def get_config_defaults(self):
@@ -305,22 +306,22 @@ class BoardEffectProvisioner(object):
             constants.ACTION_UPDATE)
         if group == provision_group:
             if action in single_subject_actions:
-                subject = doc['subject']
+                subject = doc['subject'].lower()
                 attributes = None
                 if action  != constants.ACTION_DELETE:
                     attributes = doc['attributes']
-                return ParsedSubjectMessage(action, subject, attributes)
+                return ParsedSubjectMessage(action, group, subject, attributes)
             elif action == constants.ACTION_MEMBERSHIP_SYNC:
                 subjects = doc['subjects']
                 attributes = doc['attributes']
-                return ParsedSyncMessage(action, subjects, attributes)
+                return ParsedSyncMessage(action, group, subjects, attributes)
         else:
             if action in single_subject_actions:
-                subject = doc["subject"]
-                return ParsedWorkroomMessage(action, subject, group)
+                subject = doc["subject"].lower()
+                return ParsedWorkroomMessage(action, group, subject)
             elif action == constants.ACTION_MEMBERSHIP_SYNC:
                 subjects = doc["subjects"]
-                return ParsedSyncWorkroomMessage(action, subjects, group)
+                return ParsedSyncWorkroomMessage(action, group, subjects)
         raise Exception("Could not parse message: {0}".format(msg))
 
     def map_attributes(self, attribs, subject, action):
@@ -340,22 +341,19 @@ class BoardEffectProvisioner(object):
         return props
 
     @inlineCallbacks
-    def sync_members(self, msg):
+    def sync_members(self, subjects, attrib_map):
         """
         Sync all subects to Board Effect accounts.
         (Except non-SSO accounts).
         """
         log = self.log
         unmanaged_logins = self.unmanaged_logins
-        subjects = msg.subjects
-        attrib_map = msg.attributes
         for subject in subjects:
             subject = subject.lower()
             if subject in unmanaged_logins:
                 continue
             attributes = attrib_map[subject]
-            generated_msg = ParsedSubjectMessage(constants.ACTION_ADD, subject, attributes)
-            yield self.provision_subject(generated_msg)
+            yield self.provision_subject(subject, attributes)
         subject_set = set(subject.lower() for subject in subjects)
         doc = yield self.fetch_all_users()
         account_data = doc["data"]
@@ -367,23 +365,22 @@ class BoardEffectProvisioner(object):
             if login in unmanaged_logins:
                 continue
             if not login in subject_set:
-                generated_msg = ParsedSubjectMessage(constants.ACTION_DELETE, login, None)
-                yield self.deprovision_subject(generated_msg) 
+                yield self.deprovision_subject(login) 
 
     @inlineCallbacks
-    def provision_subject(self, msg):
+    def provision_subject(self, subject, attributes):
         """
         Provision a subject to Board Effect.
         """
         log = self.log
         log.debug(
             "Attempting to provision subject '{subject}'.",
-            subject=msg.subject)
-        remote_id = yield self.fetch_account_id(msg)
+            subject=subject)
+        remote_id = yield self.fetch_account_id(subject)
         if remote_id is not None:
-            yield self.update_subject(remote_id, msg)
+            yield self.update_subject(subject, remote_id, attributes)
         else:
-            yield self.add_subject(msg)
+            yield self.add_subject(subject, attributes)
         returnValue(None)
 
     @inlineCallbacks
@@ -522,7 +519,7 @@ class BoardEffectProvisioner(object):
         returnValue(None)
     
     @inlineCallbacks
-    def add_subject_to_workroom(self, msg, workroom, workroom_id=None):
+    def add_subject_to_workroom(self, workroom, subject, workroom_id=None, subject_id=None):
         """
         Add a subject to a workroom.
         """
@@ -534,15 +531,16 @@ class BoardEffectProvisioner(object):
                     "Unable to find workroom ID for '{workroom}'.  Discarding ...",
                     workroom=workroom)
                 returnValue(None)
-        subject_id = yield self.fetch_account_id(msg)
         if subject_id is None:
-            yield delay(self.reactor, self.workroom_retry_delay) 
-            subject_id = yield self.fetch_account_id(msg)
+            subject_id = yield self.fetch_account_id(subject)
             if subject_id is None:
-                log.warn(
-                    "Unable to find remote_id for subject '{subject}'.  Discarding ...",
-                    subject=msg.subject)
-                returnValue(None)
+                yield delay(self.reactor, self.workroom_retry_delay) 
+                subject_id = yield self.fetch_account_id(subject)
+                if subject_id is None:
+                    log.warn(
+                        "Unable to find remote_id for subject '{subject}'.  Discarding ...",
+                        subject=subject)
+                    returnValue(None)
         prefix = self.url_prefix
         url = "{0}{1}".format(
             prefix,
@@ -560,8 +558,8 @@ class BoardEffectProvisioner(object):
                     headers=headers)
             except Exception as ex:
                 log.error(
-                    "Error attempting to remove subject '{subject}' from workroom '{workroom}'."
-                    subject=msg.subject,
+                    "Error attempting to remove subject '{subject}' from workroom '{workroom}'.",
+                    subject=subject,
                     workroom=workroom
                 )
                 raise
@@ -576,16 +574,16 @@ class BoardEffectProvisioner(object):
             except Exception as ex:
                 raise Exception(
                     "Unknown error prevented adding subject '{0}' to workroom '{1}'.".format(
-                    msg.subject,
+                    subject,
                     workroom))
             raise Exception(
                 "Error adding subject '{0}' to workroom '{1}': {2}".format(
-                msg.subject,
+                subject,
                 workroom,
                 error))
 
     @inlineCallbacks
-    def remove_subject_from_workroom(self, msg, workroom, workroom_id=None, subject_id=None):
+    def remove_subject_from_workroom(self, workroom, subject, workroom_id=None, subject_id=None):
         """
         Remove a subject from a workroom.
         """
@@ -598,11 +596,11 @@ class BoardEffectProvisioner(object):
                     workroom=workroom)
                 returnValue(None)
         if subject_id is None:
-            subject_id = yield self.fetch_account_id(msg)
+            subject_id = yield self.fetch_account_id(subject)
             if subject_id is None:
                 log.warn(
                     "Unable to find remote_id for subject '{subject}'.  Discarding ...",
-                    subject=msg.subject)
+                    subject=subject)
                 returnValue(None)
         prefix = self.url_prefix
         url = "{0}{1}".format(
@@ -621,8 +619,8 @@ class BoardEffectProvisioner(object):
                     headers=headers)
             except Exception as ex:
                 log.error(
-                    "Error attempting to remove subject '{subject}' from workroom '{workroom}'."
-                    subject=msg.subject,
+                    "Error attempting to remove subject '{subject}' from workroom '{workroom}'.",
+                    subject=subject,
                     workroom=workroom
                 )
                 raise
@@ -637,66 +635,56 @@ class BoardEffectProvisioner(object):
             except Exception as ex:
                 raise Exception(
                     "Unknown error prevented removing subject '{0}' from workroom '{1}'.".format(
-                    msg.subject,
+                    subject,
                     workroom))
             raise Exception(
                 "Error removing subject '{0}' from workroom '{1}': {2}".format(
-                msg.subject,
+                subject,
                 workroom,
                 error))
 
     @inlineCallbacks
-    def sync_subjects_to_workroom(self, msg, workroom):
+    def sync_subjects_to_workroom(self, workroom, subjects):
         """
         Sync workroom membership.
         """
         log = self.log
-        group = msg.group
+        workroom_id = yield self.fetch_workroom_id(workroom)
         if workroom_id is None:
-            workroom_id = yield self.fetch_workroom_id(workroom)
-            if workroom_id is None:
-                log.warn(
-                    "Unable to find workroom ID for '{workroom}'.  Discarding ...",
-                    workroom=workroom)
-                returnValue(None)
-        subjects = msg.subjects
+            log.warn(
+                "Unable to find workroom ID for '{workroom}'.  Discarding ...",
+                workroom=workroom)
+            returnValue(None)
         subject_ids = []
         for subject in subjects:
-            subject_id = yield self.fetch_account_id(msg)
+            subject_id = yield self.fetch_account_id(subject)
             if subject_id is None:
                 log.warn(
                     "Could not find remote ID for subject '{subject}'."
                     "  Ignoring for sync to workroom.",
                     subject=subject)
                 continue
-            subject_ids.append(subject_id)
-        for subject_id in subject_ids:
-            generated_msg = ParsedWorkroomMessage(
-                constants.ADD_MEMBER,
-                subject,
-                group)
+            subject_ids.append((subject, subject_id))
+        for subject, subject_id in subject_ids:
             yield self.add_subject_to_workroom(
-                generated_msg, 
                 workroom,
-                workroom_id=workroom_id)
-        subject_id_set = set(subject_ids)
-        remote_ids = yield self.get_subjects_for_workroom(workroom_id)
-        for remote_id in remote_ids:
+                subject,
+                workroom_id=workroom_id,
+                subject_id=subject_id)
+        subject_id_set = set(identifier for junk, identifier in subject_ids)
+        actual_subjects = yield self.get_subjects_for_workroom(workroom_id)
+        for login, remote_id in actual_subjects:
             if not remote_id in subject_id_set:
-                generated_msg = ParsedWorkroomMessage(
-                    constants.DELETE_MEMBER,
-                    subject_id,
-                    group)
-                yield self.remove_subject_from workroom(
-                    generated_msg,
+                yield self.remove_subject_from_workroom(
                     workroom,
+                    login,
                     workroom_id=workroom_id,
-                    subject_id=subject_id)
+                    subject_id=remote_id)
 
     @inlineCallbacks
     def get_subjects_for_workroom(self, workroom_id):
         """
-        Retireve a list of subject_ids that belong to a workroom identified
+        Retireve a list of (logins, subject_ids) that belong to a workroom identified
         by workroom_id.
         """
         log = self.log
@@ -725,8 +713,13 @@ class BoardEffectProvisioner(object):
             log.error("Error attempting to parse response.")
             raise
         log.debug("Received valid JSON response")
-        #TODO: Parse out subject_ids into a list.
-        returnValue(doc)
+        data = doc["data"]
+        subjects = []
+        for entry in data:
+            login = entry["login"].lower()
+            remote_id = entry["id"]
+            subjects.append((login, remote_id))
+        returnValue(subjects)
 
     @inlineCallbacks
     def fetch_all_users(self):
@@ -762,7 +755,7 @@ class BoardEffectProvisioner(object):
         returnValue(doc)
 
     @inlineCallbacks
-    def fetch_account_id(self, msg):
+    def fetch_account_id(self, subject):
         """
         Fetch an existing remote account ID and return it or None if the remote 
         account does not exist.
@@ -786,11 +779,10 @@ class BoardEffectProvisioner(object):
                 identifier = entry["id"]
                 account_cache[login] = identifier 
             log.debug("Cache size after prefill: {cache_size}", cache_size=len(account_cache))
-        subject = msg.subject.lower()
         if subject in account_cache:
             remote_id = account_cache[subject]
             returnValue(remote_id)
-        log.debug("Account ID not in cache for '{subject}.", subject=subject)
+        log.debug("Account ID not in cache for '{subject}'.", subject=subject)
         if account_data is None:
             doc = yield self.fetch_all_users()
             account_data = doc["data"]
@@ -805,23 +797,21 @@ class BoardEffectProvisioner(object):
         returnValue(None)
 
     @inlineCallbacks
-    def update_subject(self, remote_id, msg):
+    def update_subject(self, subject, remote_id, attributes):
         """
         Update a remote account.
         """
         log = self.log
         log.debug("Entered update_subject().")
-        subject = msg.subject
         log.debug("Updating subject '{subject}'", subject=subject)
-        attributes = msg.attributes
-        props = self.map_attributes(attributes, subject, msg.action)
+        props = self.map_attributes(attributes, subject, constants.ACTION_UPDATE)
         props['active'] = '1'
         prefix = self.url_prefix
         url = "{0}{1}".format(
             prefix,
             self.account_update.render(
                 remote_id=remote_id,
-                subject=msg.subject,
+                subject=subject,
                 attributes=props))
         headers = {'Accept': ['application/json']}
         log.debug("url: {url}", url=url)
@@ -842,22 +832,18 @@ class BoardEffectProvisioner(object):
             yield resp.content()
 
     @inlineCallbacks
-    def add_subject(self, msg):
+    def add_subject(self, subject, attributes):
         """
         Add a remote service account.
         """
         log = self.log
         log.debug("Entered add_subject().")
-        subject = msg.subject.lower()
-        action = msg.action
         log.debug("Adding a new account ...")
-        attributes = msg.attributes
-        props = self.map_attributes(attributes, subject, action)
+        props = self.map_attributes(attributes, subject, constants.ACTION_ADD)
         props['active'] = '1'
         account_doc = self.account_template.render(
             props=props,
-            subject=subject,
-            action=action)
+            subject=subject)
         log.debug("Account doc: {doc}", doc=account_doc)
         prefix = self.url_prefix
         url = "{0}{1}".format(
@@ -882,21 +868,21 @@ class BoardEffectProvisioner(object):
             resp_code = resp.code
             log.debug("Response code: {code}", code=resp_code)
             doc = yield resp.json()
-            remote_id = doc["id"]
+            remote_id = doc["data"]["id"]
             self.__account_cache[subject.lower()] = remote_id
 
     @inlineCallbacks
-    def deprovision_subject(self, msg):
+    def deprovision_subject(self, subject):
         """
         Deprovision a subject from the remote service.
         """
         log = self.log
         log.debug("Entered deprovision_subject().")
-        subject = msg.subject.lower()
+        subject = subject.lower()
         log.debug(
             "Attempting to deprovision subject '{subject}'.",
             subject=subject)
-        remote_id = yield self.fetch_account_id(msg)
+        remote_id = yield self.fetch_account_id(subject)
         if remote_id is None:
             log.debug("Account '{subject}' does not exist on the remote service.",
                 subject=subject)
