@@ -352,6 +352,8 @@ class BoardEffectProvisioner(object):
         log.debug("Making API call.  method: {method}, URL: {url}", method=method, url=url)
         response = yield getattr(http_client, method)(url, **http_options)
         log.debug("API call complete.  Response code: {code}", code=response.code)
+        if response.code == 401:
+            self.__auth_token = None
         returnValue(response)
 
     @inlineCallbacks
