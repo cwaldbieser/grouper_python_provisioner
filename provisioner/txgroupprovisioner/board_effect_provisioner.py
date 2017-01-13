@@ -187,10 +187,10 @@ class BoardEffectProvisioner(object):
                 # Create the account template.
                 self.make_account_template(account_template_path)
             if workroom_map_path:
-                # Create the workroom map.
-                self.make_workroom_map(workroom_map_path)
                 # Create the workroom cache.
                 self.__workroom_cache = pylru.lrucache(self.workroom_cache_size)
+            # Create the workroom map.
+            self.make_workroom_map(workroom_map_path)
             # Create account cache.
             self.__account_cache = pylru.lrucache(self.cache_size)
             # Initialize access token.
