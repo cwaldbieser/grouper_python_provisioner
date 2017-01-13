@@ -60,6 +60,13 @@ class ParsedWorkroomMessage(object):
     group = attr.attrib()
 
 
+@attr.attrs
+class ParsedSyncWorkroomMessage(object):
+    action = attr.attrib()
+    subjects = attr.attrib()
+    group = attr.attrib()
+
+
 class UnknowActionError(Exception):
     pass
 
@@ -156,6 +163,7 @@ class BoardEffectProvisioner(object):
                     attrib_map_path = config["attribute_map"]
                 if workroom_map_path:
                     self.workrooms_query = config['workrooms_query']
+                    self.workroom_members = jinja2.Template(config['workroom_members'])
                     self.workroom_subject = jinja2.Template(config['workroom_subject'])
                     self.workroom_cache_size = int(config.get("workroom_cache_size", 100))
                     self.workroom_retry_delay = int(config.get("workroom_retry_delay", 20))
@@ -310,6 +318,9 @@ class BoardEffectProvisioner(object):
             if action in single_subject_actions:
                 subject = doc["subject"]
                 return ParsedWorkroomMessage(action, subject, group)
+            elif action == constants.ACTION_MEMBERSHIP_SYNC:
+                subjects = doc["subjects"]
+                return ParsedSyncWorkroomMessage(action, subjects, group)
         raise Exception("Could not parse message: {0}".format(msg))
 
     def map_attributes(self, attribs, subject, action):
@@ -509,17 +520,18 @@ class BoardEffectProvisioner(object):
         returnValue(None)
     
     @inlineCallbacks
-    def add_subject_to_workroom(self, msg, workroom):
+    def add_subject_to_workroom(self, msg, workroom, workroom_id=None):
         """
         Add a subject to a workroom.
         """
         log = self.log
-        workroom_id = yield self.fetch_workroom_id(workroom)
         if workroom_id is None:
-            log.warn(
-                "Unable to find workroom ID for '{workroom}'.  Discarding ...",
-                workroom=workroom)
-            returnValue(None)
+            workroom_id = yield self.fetch_workroom_id(workroom)
+            if workroom_id is None:
+                log.warn(
+                    "Unable to find workroom ID for '{workroom}'.  Discarding ...",
+                    workroom=workroom)
+                returnValue(None)
         subject_id = yield self.fetch_account_id(msg)
         if subject_id is None:
             yield delay(self.reactor, self.workroom_retry_delay) 
@@ -545,7 +557,11 @@ class BoardEffectProvisioner(object):
                     url, 
                     headers=headers)
             except Exception as ex:
-                log.error("Error attempting to update existing account.")
+                log.error(
+                    "Error attempting to remove subject '{subject}' from workroom '{workroom}'."
+                    subject=msg.subject,
+                    workroom=workroom
+                )
                 raise
             resp_code = resp.code
             log.debug("Response code: {code}", code=resp_code)
@@ -567,20 +583,19 @@ class BoardEffectProvisioner(object):
                 error))
 
     @inlineCallbacks
-    def remove_subject_from_workroom(self, msg, workroom):
+    def remove_subject_from_workroom(self, msg, workroom, workroom_id=None, subject_id=None):
         """
         Remove a subject from a workroom.
         """
         log = self.log
-        workroom_id = yield self.fetch_workroom_id(workroom)
         if workroom_id is None:
-            log.warn(
-                "Unable to find workroom ID for '{workroom}'.  Discarding ...",
-                workroom=workroom)
-            returnValue(None)
-        subject_id = yield self.fetch_account_id(msg)
+            workroom_id = yield self.fetch_workroom_id(workroom)
+            if workroom_id is None:
+                log.warn(
+                    "Unable to find workroom ID for '{workroom}'.  Discarding ...",
+                    workroom=workroom)
+                returnValue(None)
         if subject_id is None:
-            yield delay(self.reactor, self.workroom_retry_delay) 
             subject_id = yield self.fetch_account_id(msg)
             if subject_id is None:
                 log.warn(
@@ -603,7 +618,11 @@ class BoardEffectProvisioner(object):
                     url, 
                     headers=headers)
             except Exception as ex:
-                log.error("Error attempting to update existing account.")
+                log.error(
+                    "Error attempting to remove subject '{subject}' from workroom '{workroom}'."
+                    subject=msg.subject,
+                    workroom=workroom
+                )
                 raise
             resp_code = resp.code
             log.debug("Response code: {code}", code=resp_code)
@@ -623,7 +642,90 @@ class BoardEffectProvisioner(object):
                 msg.subject,
                 workroom,
                 error))
-        
+
+    @inlineCallbacks
+    def sync_subjects_to_workroom(self, msg, workroom):
+        """
+        Sync workroom membership.
+        """
+        log = self.log
+        group = msg.group
+        if workroom_id is None:
+            workroom_id = yield self.fetch_workroom_id(workroom)
+            if workroom_id is None:
+                log.warn(
+                    "Unable to find workroom ID for '{workroom}'.  Discarding ...",
+                    workroom=workroom)
+                returnValue(None)
+        subjects = msg.subjects
+        subject_ids = []
+        for subject in subjects:
+            subject_id = yield self.fetch_account_id(msg)
+            if subject_id is None:
+                log.warn(
+                    "Could not find remote ID for subject '{subject}'."
+                    "  Ignoring for sync to workroom.",
+                    subject=subject)
+                continue
+            subject_ids.append(subject_id)
+        for subject_id in subject_ids:
+            generated_msg = ParsedWorkroomMessage(
+                constants.ADD_MEMBER,
+                subject,
+                group)
+            yield self.add_subject_to_workroom(
+                generated_msg, 
+                workroom,
+                workroom_id=workroom_id)
+        subject_id_set = set(subject_ids)
+        remote_ids = yield self.get_subjects_for_workroom(workroom_id)
+        for remote_id in remote_ids:
+            if not remote_id in subject_id_set:
+                generated_msg = ParsedWorkroomMessage(
+                    constants.DELETE_MEMBER,
+                    subject_id,
+                    group)
+                yield self.remove_subject_from workroom(
+                    generated_msg,
+                    workroom,
+                    workroom_id=workroom_id,
+                    subject_id=subject_id)
+
+    @inlineCallbacks
+    def get_subjects_for_workroom(self, workroom_id):
+        """
+        Retireve a list of subject_ids that belong to a workroom identified
+        by workroom_id.
+        """
+        log = self.log
+        http_client = self.http_client
+        prefix = self.url_prefix
+        url = "{0}{1}".format(
+            prefix, 
+            self.workroom_members.render(workroom_id=workroom_id))
+        headers = {
+            'Accept': ['application/json'],
+        }
+        log.debug("URL (GET): {url}", url=url)
+        log.debug("headers: {headers}", headers=headers)
+        try:
+            resp = yield self.make_authenticated_api_call("GET", url, headers=headers)
+        except Exception as ex:
+            log.error("Error attempting to retrieve existing workroom members.")
+            raise
+        log.debug("HTTP GET complete.  Response code was: {code}", code=resp.code)
+        resp_code = resp.code
+        if resp_code != 200:
+            raise Exception("Invalid response code: {0}".format(resp_code))
+        try:
+            doc = yield resp.json()
+        except Exception as ex:
+            log.error("Error attempting to parse response.")
+            raise
+        log.debug("Received valid JSON response")
+        #TODO: Parse out subject_ids into a list.
+        returnValue(doc)
+
     @inlineCallbacks
     def fetch_all_users(self):
         """
