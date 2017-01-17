@@ -9,6 +9,7 @@ from json import load, loads
 import os
 import os.path
 from textwrap import dedent
+import traceback
 from config import load_config, section2dict
 import sqlite3
 import sys
@@ -308,6 +309,11 @@ class LDAPProvisioner(object):
             log.debug("{count} subjects provided for sync.",
                 count=len(subjects))
             target = self.group_to_ldap_group(group)
+            if target is None:
+                log.warn(
+                    "No group mapping for '{group}'.  Discarding ...",
+                    group=group)
+                returnValue(None)
             client = yield self.get_ldap_client()
             try:
                 if target.target_type == "group":
@@ -325,6 +331,8 @@ class LDAPProvisioner(object):
                         yield self.sync_attribute(target, subjects, client)
             except Exception as ex:
                 log.error("Fatal error:\n{error}", error=ex)
+                tb = traceback.format_exc()
+                log.debug("{traceback}", traceback=tb)
                 raise
             finally:
                 if client.connected:
@@ -590,6 +598,11 @@ class LDAPProvisioner(object):
             else:
                 service_state.last_update = datetime.datetime.today()
                 log.debug("LDAP provisioner last process loop successful.")
+        except Exception as ex:
+            log.warn("Error provisioning LDAP target: {ex}", ex=ex)
+            tb = traceback.format_exc()
+            log.debug("{traceback}", traceback=tb)
+            raise
         finally:
             self.provisioner_state = self.IDLE
     
