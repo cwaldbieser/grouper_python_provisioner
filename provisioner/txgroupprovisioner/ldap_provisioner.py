@@ -1085,7 +1085,8 @@ class LDAPProvisioner(object):
                     values = list(value_set)
                     values.sort()
                     if len(values) == 0:
-                        del subject_entry[attrib_name]
+                        if attrib_name in subject_entry:
+                            del subject_entry[attrib_name]
                     else:
                         subject_entry[attrib_name] = values
                 else:
