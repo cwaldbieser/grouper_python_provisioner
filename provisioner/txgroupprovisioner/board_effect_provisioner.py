@@ -10,7 +10,7 @@ import traceback
 import attr
 import pylru
 import treq
-from twisted.internet import defer
+from twisted.internet import defer, task
 from twisted.internet.defer import (
     inlineCallbacks, 
     returnValue,
