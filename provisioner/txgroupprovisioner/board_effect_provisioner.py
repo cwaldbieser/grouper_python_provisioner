@@ -158,6 +158,7 @@ class BoardEffectProvisioner(object):
                 self.cache_size = int(config["cache_size"])
                 self.authenticate = config['authenticate']
                 self.accounts_query = config['accounts_query']
+                self.max_page = int(config.get('max_page', 100))
                 if self.provision_group:
                     self.account_update = jinja2.Template(config['account_update'])
                     self.account_delete = jinja2.Template(config['account_delete'])
@@ -441,6 +442,54 @@ class BoardEffectProvisioner(object):
         returnValue(response)
 
     @inlineCallbacks
+    def make_paged_authenticated_api_call(self, method, url, allowed_responses=None, **http_options):
+        """
+        Make an authenticated API call, collect the paged results, and return the
+        entire result set.
+        """
+        log = self.log
+        if allowed_responses == None:
+            allowed_responses = set([200])
+        page = 0
+        last_page = 1
+        max_page = self.max_page
+        data = []
+        if "params" in http_options:
+            params = http_options["params"]
+        else:
+            params = {}
+            http_options["params"] = params
+        while page <= min(last_page, max_page):
+            page = page + 1
+            log.debug(
+                "page == {page}, last_page == {last_page}",
+                page=page,
+                last_page=last_page)
+            params['page'] = page
+            try:
+                resp = yield self.make_authenticated_api_call(method, url, **http_options)
+            except Exception as ex:
+                log.error("Error making paged API call.")
+                raise
+            log.debug(
+                "Page {page} API call complete.  Response code was: {code}", 
+                page=page,
+                code=resp.code)
+            resp_code = resp.code
+            if resp_code not in allowed_responses:
+                raise Exception("Invalid response code: {0}".format(resp_code))
+            try:
+                doc_part = yield resp.json()
+                data.extend(doc_part['data'])
+                last_page = int(doc_part['total_pages'])
+            except Exception as ex:
+                log.error("Error attempting to parse response.")
+                raise
+            log.debug("Received valid JSON response")
+        doc = {'data': data}
+        returnValue(doc)
+
+    @inlineCallbacks
     def fetch_all_workrooms(self):
         """
         Load all workrooms from the sevice.
@@ -456,20 +505,10 @@ class BoardEffectProvisioner(object):
         log.debug("URL (GET): {url}", url=url)
         log.debug("headers: {headers}", headers=headers)
         try:
-            resp = yield self.make_authenticated_api_call("GET", url, headers=headers)
+            doc = yield self.make_paged_authenticated_api_call("GET", url, headers=headers)
         except Exception as ex:
             log.error("Error attempting to retrieve existing workrooms.")
             raise
-        log.debug("HTTP GET complete.  Response code was: {code}", code=resp.code)
-        resp_code = resp.code
-        if resp_code != 200:
-            raise Exception("Invalid response code: {0}".format(resp_code))
-        try:
-            doc = yield resp.json()
-        except Exception as ex:
-            log.error("Error attempting to parse response.")
-            raise
-        log.debug("Received valid JSON response")
         returnValue(doc)
     
     @inlineCallbacks
@@ -737,34 +776,15 @@ class BoardEffectProvisioner(object):
         log.debug("URL (GET): {url}", url=url)
         log.debug("headers: {headers}", headers=headers)
         params={'include_inactive': 'true'}
-        page = 0
-        last_page = 1
-        data = []
-        while page <= last_page:
-            page = page + 1
-            log.debug(
-                "page == {page}, last_page == {last_page}",
-                page=page,
-                last_page=last_page)
-            params['page'] = page
-            try:
-                resp = yield self.make_authenticated_api_call("GET", url, headers=headers, params=params)
-            except Exception as ex:
-                log.error("Error attempting to retrieve existing account.")
-                raise
-            log.debug("HTTP GET complete.  Response code was: {code}", code=resp.code)
-            resp_code = resp.code
-            if resp_code != 200:
-                raise Exception("Invalid response code: {0}".format(resp_code))
-            try:
-                doc_part = yield resp.json()
-                data.extend(doc_part['data'])
-                last_page = int(doc_part['total_pages'])
-            except Exception as ex:
-                log.error("Error attempting to parse response.")
-                raise
-            log.debug("Received valid JSON response")
-        doc = {'data': data}
+        try:
+            doc = yield self.make_paged_authenticated_api_call(
+                "GET",
+                url,
+                headers=headers,
+                params=params)    
+        except Exception as ex:
+            log.error("Error fetching all users.")
+            raise
         returnValue(doc)
 
     @inlineCallbacks
