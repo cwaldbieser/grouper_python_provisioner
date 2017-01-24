@@ -1028,6 +1028,7 @@ class LDAPProvisioner(object):
         :param attrib_dels:`An iterable of LDAPTarget objects with target_type "attribute" to be removed from the subject.`
         :param client:`The connected LDAP client protocol.`
         """
+        log = self.log
         provision_user = self.provision_user
         if not provision_user:
             returnValue(None)
