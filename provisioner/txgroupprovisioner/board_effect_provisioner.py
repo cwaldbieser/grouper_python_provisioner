@@ -800,25 +800,37 @@ class BoardEffectProvisioner(object):
         log.debug("cache max size: {cache_size}", cache_size=cache_size)
         log.debug("cache current size: {cache_size}", cache_size=len(account_cache))
         account_data = None
-        if len(account_cache) == 0: 
-            # Prefill cache.
-            log.debug("Prefilling cache ...")
-            doc = yield self.fetch_all_users()
-            account_data = doc["data"]
-            for entry in account_data: 
-                if len(account_cache) >= cache_size:
-                    break
-                login = entry["login"]
-                identifier = entry["id"]
-                account_cache[login] = identifier 
-            log.debug("Cache size after prefill: {cache_size}", cache_size=len(account_cache))
         if subject in account_cache:
             remote_id = account_cache[subject]
             returnValue(remote_id)
         log.debug("Account ID not in cache for '{subject}'.", subject=subject)
-        if account_data is None:
-            doc = yield self.fetch_all_users()
-            account_data = doc["data"]
+        http_client = self.http_client
+        prefix = self.url_prefix
+        accounts_query = self.accounts_query
+        url = "{0}{1}".format(
+            prefix, 
+            self.accounts_query)
+        headers = {
+            'Accept': ['application/json'],
+        }
+        log.debug("URL (GET): {url}", url=url)
+        log.debug("headers: {headers}", headers=headers)
+        params={
+            'include_inactive': 'true',
+            'login': subject}
+        try:
+            doc = yield self.make_paged_authenticated_api_call(
+                "GET",
+                url,
+                headers=headers,
+                params=params)    
+        except Exception as ex:
+            log.error("Error fetching remote subject '{subject}'.", subject=subject)
+            raise
+        if not "data" in doc:
+            raise Exception(
+                "Unable to parse response: {0}".format(data))
+        account_data = doc["data"]
         for entry in account_data:
             log.debug("Looping through entries ...")
             login = entry["login"].lower()
