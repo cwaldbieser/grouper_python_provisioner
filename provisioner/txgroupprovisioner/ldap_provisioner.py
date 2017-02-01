@@ -1354,7 +1354,7 @@ def delay(reactor, seconds):
     """
     A Deferred that fires after `seconds` seconds.
     """
-    yield task.deferLater(reactor, seconds, lambda x: None)
+    yield task.deferLater(reactor, seconds, lambda : None)
 
 def test_entry_in_dn_set(entry, dn_set):
     """
