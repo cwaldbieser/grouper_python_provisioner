@@ -385,13 +385,14 @@ class BoardEffectProvisioner(object):
         returnValue(None)
 
     @inlineCallbacks
-    def make_authenticated_api_call(self, method, url, **http_options):
+    def fetch_auth_token(self):
+        """
+        Make API call to obtain valid auth token.
+        """
         log = self.log
-        log.debug("Making authenticated API call ...")
-        http_client = self.http_client
-        auth_token = self.__auth_token
-        if auth_token is None:
+        if self.__auth_token is None:
             log.debug("Must obtain auth token ...")
+            http_client = self.http_client
             prefix = self.url_prefix
             auth_url = "{0}{1}".format(
                 prefix,
@@ -406,7 +407,7 @@ class BoardEffectProvisioner(object):
             log.debug("method: POST, URL: {url}", url=auth_url)
             response = yield http_client.post(auth_url, data=data, headers=headers)
             resp_code = response.code
-            log.debug("API call complete.  Response code: {code}", code=resp_code)
+            log.debug("API call to obtain token is complete.  Response code: {code}", code=resp_code)
             if resp_code == 200:
                 try:
                     doc = yield response.json()
@@ -422,15 +423,26 @@ class BoardEffectProvisioner(object):
                     raise Exception("Error parsing authentication response.")
                 self.__auth_token = data["token"]
                 auth_token =  self.__auth_token
+                log.debug("New auth token obtained.")
             else:
-                if resp_code == 401:
-                    self.__auth_token = None
+                self.check_401_response(response)
                 content = yield response.content()
                 raise Exception(
-                    "Could not obtain auth token.  Response ({code}) was:\n{content}".format(
-                        code=resp_code,
-                        content=content))
-        log.debug("Have auth token.")
+                    "Unable to obtain valid auth token.  Response {0}: {1}".format(
+                    response_code=resp_code,
+                    content=content)
+                )
+
+    @inlineCallbacks
+    def make_authenticated_api_call(self, method, url, **http_options):
+        """
+        Make an authenticated API call.
+        """
+        log = self.log
+        log.debug("Making authenticated API call ...")
+        http_client = self.http_client
+        yield self.fetch_auth_token()
+        auth_token = self.__auth_token
         headers = http_options.setdefault("headers", {})
         headers["Authorization"] = [auth_token]
         method = method.lower()
@@ -438,8 +450,26 @@ class BoardEffectProvisioner(object):
         response = yield getattr(http_client, method)(url, **http_options)
         log.debug("API call complete.  Response code: {code}", code=response.code)
         if response.code == 401:
+            log.debug("Got unauthorized response.  Will reauthorize and retry.")
             self.__auth_token = None
+            yield self.fetch_auth_token()
+            response = yield getattr(http_client, method)(url, **http_options)
+            log.debug("API call complete.  Response code: {code}", code=response.code)
         returnValue(response)
+
+    def check_401_response(self, response):
+        """
+        Check if an API response is 401 - Unauthorized.
+        If so, raise an exception.
+        """
+        log = self.log
+        if response.code == 401:
+            self.__auth_token = None
+            content = yield response.content()
+            raise Exception(
+                "Could not obtain auth token.  Response ({code}) was:\n{content}".format(
+                    code=resp_code,
+                    content=content))
 
     @inlineCallbacks
     def make_paged_authenticated_api_call(self, method, url, allowed_responses=None, **http_options):
