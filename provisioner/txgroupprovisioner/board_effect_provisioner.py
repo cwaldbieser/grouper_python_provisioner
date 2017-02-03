@@ -453,6 +453,8 @@ class BoardEffectProvisioner(object):
             log.debug("Got unauthorized response.  Will reauthorize and retry.")
             self.__auth_token = None
             yield self.fetch_auth_token()
+            auth_token = self.__auth_token
+            headers["Authorization"] = [auth_token]
             response = yield getattr(http_client, method)(url, **http_options)
             log.debug("API call complete.  Response code: {code}", code=response.code)
         returnValue(response)
