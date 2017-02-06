@@ -104,6 +104,10 @@ class LDAPAttributeResolver(object):
                 event_type='error_load_ldap_subject',
                 subject=subject) 
             raise
+        finally:
+            if client.connected:
+                client.unbind()
+                log.debug("LDAP client ended connection.")
         for n, entry in enumerate(results):
             if n != 0:
                 raise Exception(
