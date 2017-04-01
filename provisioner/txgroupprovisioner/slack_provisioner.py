@@ -63,6 +63,12 @@ class UnknowActionError(Exception):
     pass
 
 
+@attr.attrs
+class APIError(Exception):
+    message = attr.attrib()
+    api_error = attr.attrib()
+
+
 @implementer(IAgentEndpointFactory)
 class WebClientEndpointFactory(object):
     """
@@ -239,9 +245,16 @@ class SlackProvisioner(object):
                 "Warning in HTTP Response: {warning}",
                 warning=doc["warning"])
         if not doc["ok"]:
-            raise Exception(
-                "Error in web API: {error}".format(
-                    error=doc["error"]))
+            log.debug("Parsed document is NOT ok ...")
+            if "error" in doc:
+                api_error = doc["error"]
+            else:
+                api_error = None
+            log.debug("api_error == {api_error}", api_error=api_error)
+            ex = APIError(
+                "Error in web API: {error}".format(error=api_error),
+                api_error)
+            raise ex
 
     @inlineCallbacks
     def fetch_all_users(self):
@@ -636,8 +649,26 @@ class SlackProvisioner(object):
                     subject=subject) 
             else:
                 user_ids.append(user_id)
-        yield self.set_usergroup_members(usergroup_id, user_ids) 
+        try:
+            yield self.set_usergroup_members(usergroup_id, user_ids) 
+        except APIError as ex:
+            if ex.api_error == "invalid_users":
+                self.remove_subjects_from_cache(subjects)
+            raise ex
         returnValue(None)
+
+    def remove_subjects_from_cache(self, subjects):
+        """
+        Remove subjects from cache.
+        """
+        log = self.log
+        log.debug("Removing subjects from cache: {subjects}", subjects=subjects)
+        cache = self.__user_cache
+        for subject in subjects:
+            local_id = self.user_id_formatter.render(subject=subject)
+            if local_id in cache:
+                del cache[local_id]
+        log.debug("Subjects removed from cache.")
 
     def make_web_agent(self):
         """
