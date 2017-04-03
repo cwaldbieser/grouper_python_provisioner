@@ -299,6 +299,10 @@ class SlackProvisioner(object):
                 continue
             if member["is_bot"]:
                 continue
+            if member.get("is_restricted", False) == True:
+                continue
+            if member.get("is_ultra_restricted", False) == True:
+                continue
             if "profile" in member:
                 profile = member["profile"]
                 email = profile.get("email", None)
