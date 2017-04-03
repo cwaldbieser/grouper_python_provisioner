@@ -883,6 +883,7 @@ class BoardEffectProvisioner(object):
         log.debug("Updating subject '{subject}'", subject=subject)
         props = self.map_attributes(attributes, subject, constants.ACTION_UPDATE)
         props['active'] = '1'
+        props['preferred_contact_address'] = 'Company'
         prefix = self.url_prefix
         url = "{0}{1}".format(
             prefix,
@@ -918,6 +919,7 @@ class BoardEffectProvisioner(object):
         log.debug("Adding a new account ...")
         props = self.map_attributes(attributes, subject, constants.ACTION_ADD)
         props['active'] = '1'
+        props['preferred_contact_address'] = 'Company'
         account_doc = self.account_template.render(
             props=props,
             subject=subject)
