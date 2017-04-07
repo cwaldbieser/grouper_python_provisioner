@@ -179,12 +179,12 @@ class BoardEffectProvisioner(object):
                 self.authenticate = config['authenticate']
                 self.accounts_query = config['accounts_query']
                 self.max_page = int(config.get('max_page', 100))
+                self.local_computed_match_template = jinja2.Template(config['local_computed_match_template'])
                 if self.provision_group:
                     self.account_update = jinja2.Template(config['account_update'])
                     self.account_delete = jinja2.Template(config['account_delete'])
                     self.account_add = config['account_add']
                     account_template_path = config['account_template']
-                    self.local_computed_match_template = jinja2.Template(config['local_computed_match_template'])
                     attrib_map_path = config["attribute_map"]
                 if workroom_map_path:
                     self.workrooms_query = config['workrooms_query']
