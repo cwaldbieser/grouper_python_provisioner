@@ -688,6 +688,8 @@ class BoardEffectProvisioner(object):
         Remove a subject from a workroom.
         """
         log = self.log
+        assert (subject is not None) or (subject_id is not None), "Must provide `subject` or `subject_id`!"
+        subject_identifier = subject or subject_id
         if workroom_id is None:
             workroom_id = yield self.fetch_workroom_id(workroom)
             if workroom_id is None:
@@ -719,8 +721,8 @@ class BoardEffectProvisioner(object):
                     headers=headers)
             except Exception as ex:
                 log.error(
-                    "Error attempting to remove subject '{subject}' from workroom '{workroom}'.",
-                    subject=subject,
+                    "Error attempting to remove subject identified by '{identifier}' from workroom '{workroom}'.",
+                    identifier=subject_identifier,
                     workroom=workroom
                 )
                 raise
@@ -734,12 +736,12 @@ class BoardEffectProvisioner(object):
                 error = doc["error"]["message"]
             except Exception as ex:
                 raise Exception(
-                    "Unknown error prevented removing subject '{0}' from workroom '{1}'.".format(
-                    subject,
+                    "Unknown error prevented removing subject identified by '{0}' from workroom '{1}'.".format(
+                    subject_identifier,
                     workroom))
             raise Exception(
-                "Error removing subject '{0}' from workroom '{1}': {2}".format(
-                subject,
+                "Error removing subject identified by '{0}' from workroom '{1}': {2}".format(
+                subject_identifier,
                 workroom,
                 error))
 
@@ -768,7 +770,10 @@ class BoardEffectProvisioner(object):
                     subject=subject)
                 continue
             subject_ids.append((subject, subject_id))
-        subject_id_to_subject_map = {}
+        log.debug(
+            "Adding {count} subjects to workroom '{workroom}' ...",
+            count=len(subject_ids),
+            workroom=workroom)
         for subject, subject_id in subject_ids:
             subj_attribs = None
             if attributes is not None:
@@ -779,15 +784,17 @@ class BoardEffectProvisioner(object):
                 subj_attribs,
                 workroom_id=workroom_id,
                 subject_id=subject_id)
-            subject_id_to_subject_map[subject_id] = subject
         subject_id_set = set(identifier for junk, identifier in subject_ids)
         actual_subject_ids = yield self.get_subjects_for_workroom(workroom_id)
         for remote_id in actual_subject_ids:
             if not remote_id in subject_id_set:
-                subject = subject_id_to_subject_map[remote_id]
+                log.debug(
+                    "Looking up subject for remote_id '{remote_id}' ...",
+                    remote_id=remote_id)
                 yield self.remove_subject_from_workroom(
                     workroom,
-                    subject,
+                    subject=None,
+                    attributes=None,
                     workroom_id=workroom_id,
                     subject_id=remote_id)
 
