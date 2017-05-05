@@ -395,7 +395,8 @@ class BoardEffectProvisioner(object):
             if match_value in unmanaged_logins:
                 continue
             if not match_value in local_match_set:
-                yield self.deprovision_subject(subject, attrib_map[subject]) 
+                remote_id = get_api_id_from_remote_account(entry)
+                yield self.deprovision_subject(None, None, remote_id=remote_id) 
 
     @inlineCallbacks
     def provision_subject(self, subject, attributes):
@@ -1000,17 +1001,21 @@ class BoardEffectProvisioner(object):
             self.__account_cache[subject.lower()] = remote_id
 
     @inlineCallbacks
-    def deprovision_subject(self, subject, attributes):
+    def deprovision_subject(self, subject, attributes, remote_id=None):
         """
         Deprovision a subject from the remote service.
         """
         log = self.log
         log.debug("Entered deprovision_subject().")
-        subject = subject.lower()
+        assert (subject is not None) or (remote_id is not None), (
+            "Must provide `subject` or `remote_id`!")
+        subject_identifier = subject or remote_id
         log.debug(
-            "Attempting to deprovision subject '{subject}'.",
-            subject=subject)
-        remote_id = yield self.fetch_account_id(subject, attributes)
+            "Attempting to deprovision subject identified by '{identifier}'.",
+            identifier=subject_identifier)
+        if remote_id is None:
+            subject = subject.lower()
+            remote_id = yield self.fetch_account_id(subject, attributes)
         if remote_id is None:
             log.debug("Account '{subject}' does not exist on the remote service.",
                 subject=subject)
@@ -1033,8 +1038,8 @@ class BoardEffectProvisioner(object):
                     data=data)
             except Exception as ex:
                 log.error(
-                    "Error attempting to delete existing account.  subject: {subject}",
-                    subject=subject
+                    "Error attempting to delete existing account.  subject identified by: {identifier}",
+                    identifier=subject_identifier
                 )
                 raise
             resp_code = resp.code
@@ -1042,13 +1047,18 @@ class BoardEffectProvisioner(object):
             content = yield resp.content()
             if resp_code != 200:
                 log.error(
-                    "API error attempting to delete subject {subject}:\n{content}",
-                    subject=subject,
+                    "API error attempting to delete subject identified by '{subject}':\n{content}",
+                    subject=subject_identifier,
                     content=content)
                 raise Exception("API error attempting to delete remote subject.")
             account_cache = self.__account_cache
-            if subject in account_cache:
-                del account_cache[subject]
+            if not subject is None:
+                if subject in account_cache:
+                    del account_cache[subject]
+            else:
+                for subject, r_id in account_cache.items():
+                    if remote_id == r_id:
+                        del account_cache[subject]
 
     def make_web_agent(self):
         """
