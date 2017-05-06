@@ -255,6 +255,19 @@ class RESTProvisioner(object):
             yield None
         raise NotImplementedError()
 
+    @inlineCallbacks
+    def api_add_subject(self, subject, attributes):
+        """
+        Use the API to add subjects.
+        
+        Returns the API ID of the newly created remote account or None.
+        If None is returned, the API ID will not be cached and require
+        a lookup on future use.
+        """
+        if False:
+            yield None
+        raise NotImplementedError()
+
     def parse_config(self, scp):
         """
         Parse any additional configuration this provisioner might need.
@@ -494,7 +507,7 @@ class RESTProvisioner(object):
             log.debug("Auth token obtained.")
 
     @inlineCallbacks
-    def make_authenticate_api_call(self, method, url, **http_options):
+    def make_authenticated_api_call(self, method, url, **http_options):
         """
         Given the components of an HTTP client request, make an
         authenticated request.
@@ -683,7 +696,7 @@ class RESTProvisioner(object):
             api_id = account_cache[subject]
             returnValue(api_id)
         log.debug("Account ID not in cache for '{subject}'.", subject=subject)
-        api_id = yield self.api_get_account_id(self, subject, attributes)
+        api_id = yield self.api_get_account_id(subject, attributes)
         if api_id is not None:
             account_cache[subject] = api_id
         returnValue(api_id)
@@ -714,7 +727,7 @@ class RESTProvisioner(object):
         log = self.log
         log.debug("Adding a new account ...")
         try:
-            api_id = yield api_add_subject(subject, attributes)
+            api_id = yield self.api_add_subject(subject, attributes)
         except Exception as ex:
             log.error(
                 "Error attempting to add subject '{subject}'.",
@@ -778,7 +791,7 @@ class RESTProvisioner(object):
         return (pool, agent, http_client)
 
     def make_default_web_client(self):
-        pool, agent, http_client = self.make_web_agent(self.endpoint_s)
+        pool, agent, http_client = self.make_web_client(self.endpoint_s)
         self.pool = pool
         self.agent = agent
         self.http_client = http_client

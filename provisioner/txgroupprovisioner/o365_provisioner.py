@@ -1,10 +1,12 @@
 
 from __future__ import print_function
+import json
 from rest_provisioner import (
     APIResponseError,
     OptionMissingError,
     RESTProvisioner,
     RESTProvisionerFactory, 
+    StringProducer,
 )
 from twisted.internet.defer import (
     inlineCallbacks, 
@@ -62,6 +64,7 @@ class O365Provisioner(RESTProvisioner):
         Parse any additional configuration this provisioner might need.
         """
         log = self.log
+        config = self.config
         client_id = config.get("client_id", None)
         if client_id is None:
             raise OptionMissingError(
@@ -129,6 +132,8 @@ class O365Provisioner(RESTProvisioner):
         """
         log = self.log
         log.debug("Authorizing API call ...")
+        if False:
+            yield "Required for inlineCallbacks-- can't wait for async/await!"
         auth_token = self.auth_token
         headers = http_options.setdefault("headers", {})
         headers["Authorization"] = ["Bearer {0}".format(auth_token)]
@@ -185,11 +190,21 @@ class O365Provisioner(RESTProvisioner):
         url = "{0}/users/{1}".format(prefix, api_id)
         headers = {
             'Accept': ['application/json'],
+            'Content-Type': ['application/json'],
         }
+        props = {
+            'accountEnabled': False,
+        }
+        serialized = json.dumps(props)
+        body = StringProducer(serialized.encode('utf-8'))
+        log.debug("url: {url}", url=url)
+        log.debug("headers: {headers}", headers=headers)
+        log.debug("body: {body}", body=serialized)
         resp = yield self.make_authenticated_api_call(
             "PATCH",
             url,
-            headers=headers)
+            headers=headers,
+            data=body)
         resp_code = resp.code
         try:
             content = yield resp.content()
@@ -200,7 +215,7 @@ class O365Provisioner(RESTProvisioner):
         returnValue(None)
 
     @inlineCallbacks
-    def api_get_account_id(subject, attributes):
+    def api_get_account_id(self, subject, attributes):
         """
         Fetch the remote ID for a subject.
         Return None if the account oes not exist on the remote end.
@@ -227,6 +242,7 @@ class O365Provisioner(RESTProvisioner):
             api_id = None
         returnValue(api_id)
 
+    @inlineCallbacks
     def api_update_subject(self, subject, api_id, attributes):
         """
         Make API request to update remote account.
@@ -235,19 +251,21 @@ class O365Provisioner(RESTProvisioner):
         log = self.log
         prefix = self.url_prefix
         url = "{0}/users/{1}".format(prefix, api_id)
-        headers = {'Accept': ['application/json']}
-        surname = attributes.get("surname", "")
-        givenname = attributes.get("givenName", "")
-        mail = attributes.get("mail", "")
+        headers = {
+            'Accept': ['application/json'],
+            'Content-Type': ['application/json'],
+        }
+        surname = attributes.get("surname", [""])[0]
+        givenname = attributes.get("givenName", [""])[0]
         displayname = "{0}, {1}".format(surname, givenname)
         upn = "{0}@{1}".format(subject, self.domain)
         props = {
             'accountEnabled': True,
             'displayName': displayname,
             'givenName': givenname,
-            'mail': mail,
             'surname': surname,
             'userPrincipalName': upn,
+            'mailNickname': subject
         }
         serialized = json.dumps(props)
         body = StringProducer(serialized.encode('utf-8'))
@@ -261,6 +279,7 @@ class O365Provisioner(RESTProvisioner):
             headers=headers)
         returnValue(resp)
 
+    @inlineCallbacks
     def api_add_subject(self, subject, attributes):
         """
         Use the API to add subjects.
@@ -269,21 +288,29 @@ class O365Provisioner(RESTProvisioner):
         If None is returned, the API ID will not be cached and require
         a lookup on future use.
         """
+        log = self.log
+        log.debug("Entered: api_add_subject().")
         prefix = self.url_prefix
         url = "{0}/users".format(prefix)
-        headers = {'Accept': ['application/json']}
-        surname = attributes.get("surname", "")
-        givenname = attributes.get("givenName", "")
-        mail = attributes.get("mail", "")
+        headers = {
+            'Accept': ['application/json'],
+            'Content-Type': ['application/json'],
+        }
+        surname = attributes.get("surname", [""])[0]
+        givenname = attributes.get("givenName", [""])[0]
         displayname = "{0}, {1}".format(surname, givenname)
         upn = "{0}@{1}".format(subject, self.domain)
         props = {
             'accountEnabled': True,
             'displayName': displayname,
             'givenName': givenname,
-            'mail': mail,
             'surname': surname,
             'userPrincipalName': upn,
+            'passwordProfile': {
+                "forceChangePasswordNextSignIn": False, 
+                "password": "1ToughPassword!",
+            },
+            'mailNickname': subject,
         }
         serialized = json.dumps(props)
         body = StringProducer(serialized.encode('utf-8'))
@@ -296,13 +323,14 @@ class O365Provisioner(RESTProvisioner):
             data=body, 
             headers=headers)
         resp_code = resp.code
+        log.debug("Add-subject API response code: {code}", code=resp_code)
         if resp_code != 201:
             content = yield resp.content()
             log.error(
                 "API response {code}: {content}", 
                 code=resp_code,
                 content=content)
-            raise APIResponseError("API returned status {0}".format(resp_code))
+            raise Exception("API returned status {0}".format(resp_code))
         else:
             parsed = yield resp.json()
             api_id = parsed["id"]
