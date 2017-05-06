@@ -75,6 +75,12 @@ class O365Provisioner(RESTProvisioner):
             raise OptionMissingError(
                 "The `domain` option is missing!") 
         self.domain = domain
+        skus = config.get("license_skus", None)
+        if skus is None:
+            skus = tuple()
+        else:
+            skus = tuple(sku.strip() for sku in skus.split(","))
+        self.skus = skus
 
     @inlineCallbacks
     def api_get_auth_token(self):
@@ -265,7 +271,8 @@ class O365Provisioner(RESTProvisioner):
             'givenName': givenname,
             'surname': surname,
             'userPrincipalName': upn,
-            'mailNickname': subject
+            'mailNickname': subject,
+            'usageLocation': 'US',
         }
         serialized = json.dumps(props)
         body = StringProducer(serialized.encode('utf-8'))
@@ -311,6 +318,7 @@ class O365Provisioner(RESTProvisioner):
                 "password": "1ToughPassword!",
             },
             'mailNickname': subject,
+            'usageLocation': 'US',
         }
         serialized = json.dumps(props)
         body = StringProducer(serialized.encode('utf-8'))
@@ -335,6 +343,132 @@ class O365Provisioner(RESTProvisioner):
             parsed = yield resp.json()
             api_id = parsed["id"]
             returnValue(api_id)
+
+    @inlineCallbacks
+    def api_add_subject_to_group(self, subject_id, target_group_id):
+        """
+        Make an authenticated API call to add the remote subject ID
+        to the remote group ID.
+        Should raise on error on failure.
+        """
+        log = self.log
+        log.debug("Entered: api_add_subject_to_group().")
+        if target_group_id in self.skus:
+            yield self.api_add_license_to_subject(subject_id, target_group_id)
+        else:
+            raise NotImplementedError()
+
+    @inlineCallbacks
+    def api_add_license_to_subject(self, subject_id, sku):
+        """
+        API call to add a license to a user.
+        """
+        log = self.log
+        prefix = self.url_prefix
+        url = "{0}/users/{1}/assignLicense".format(prefix, subject_id)
+        headers = {
+            'Accept': ['application/json'],
+            'Content-Type': ['application/json'],
+        }
+        props = {
+            'addLicenses': [
+                {
+                    "disabledPlans": [], 
+                    "skuId": sku,
+                }
+            ],
+            'removeLicenses': [],
+        }
+        serialized = json.dumps(props)
+        body = StringProducer(serialized.encode('utf-8'))
+        log.debug("url: {url}", url=url)
+        log.debug("headers: {headers}", headers=headers)
+        log.debug("body: {body}", body=serialized)
+        resp = yield self.make_authenticated_api_call(
+            'POST',  
+            url, 
+            data=body, 
+            headers=headers)
+        resp_code = resp.code
+        log.debug("Add-subject API response code: {code}", code=resp_code)
+        if resp_code != 200:
+            content = yield resp.content()
+            log.error(
+                "API response {code}: {content}", 
+                code=resp_code,
+                content=content)
+            raise Exception("API returned status {0}".format(resp_code))
+        else:
+            parsed = yield resp.json()
+            api_id = parsed["id"]
+            returnValue(api_id)
+
+    @inlineCallbacks
+    def api_remove_subject_from_group(self, subject_id, target_group_id):
+        """
+        Make an authenticated API call to add the remote subject ID
+        to the remote group ID.
+        Should raise on error on failure.
+        """
+        log = self.log
+        log.debug("Entered: api_add_subject_to_group().")
+        if target_group_id in self.skus:
+            yield self.api_remove_license_from_subject(subject_id, target_group_id)
+        else:
+            raise NotImplementedError()
+
+    @inlineCallbacks
+    def api_remove_license_from_subject(self, subject_id, sku):
+        """
+        API call to remove a license from a user.
+        """
+        log = self.log
+        prefix = self.url_prefix
+        url = "{0}/users/{1}/assignLicense".format(prefix, subject_id)
+        headers = {
+            'Accept': ['application/json'],
+            'Content-Type': ['application/json'],
+        }
+        props = {
+            'removeLicenses': [sku],
+            'addLicenses': [],
+        }
+        serialized = json.dumps(props)
+        body = StringProducer(serialized.encode('utf-8'))
+        log.debug("url: {url}", url=url)
+        log.debug("headers: {headers}", headers=headers)
+        log.debug("body: {body}", body=serialized)
+        resp = yield self.make_authenticated_api_call(
+            'POST',  
+            url, 
+            data=body, 
+            headers=headers)
+        resp_code = resp.code
+        log.debug("Add-subject API response code: {code}", code=resp_code)
+        if resp_code != 200:
+            content = yield resp.content()
+            log.error(
+                "API response {code}: {content}", 
+                code=resp_code,
+                content=content)
+            raise Exception("API returned status {0}".format(resp_code))
+        else:
+            parsed = yield resp.json()
+            api_id = parsed["id"]
+            returnValue(api_id)
+
+    @inlineCallbacks
+    def api_get_all_target_groups(self):
+        """
+        Load all target_groups from the sevice.
+        Must return an iterable that yields tuples of
+        (local_group_id, remote_group_id).
+        """
+        if False:
+            yield "Can't wait for async/await!"
+        log = self.log  
+        rval = [(sku, sku) for sku in self.skus]
+        returnValue(rval)
 
 
 class O365ProvisionerFactory(RESTProvisionerFactory):
