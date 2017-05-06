@@ -27,6 +27,7 @@ class O365Provisioner(RESTProvisioner):
       should not be managed by the provisioner (e.g. a back door admin account).
       These accounts are identified by their match_values.
     """
+    http_authn_client = None
     
     def get_match_value_from_remote_account(self, remote_account):
         """
@@ -79,9 +80,11 @@ class O365Provisioner(RESTProvisioner):
         Should set `self.auth_token`.
         """
         log = self.log
-        http_client = self.http_client
-        prefix = self.url_prefix
-        auth_url = "{0}/oauth2/token".format(prefix)
+        if self.http_authn_client is None:
+            pool, agent, client = self.make_web_client("tls:host=login.microsoftonline.com:port=443")
+            self.http_authn_client = client
+        http_client = self.http_authn_client
+        auth_url = "https://login.microsoftonline.com/LafCol.onmicrosoft.com/oauth2/token"
         headers = {
             'Accept': ['application/json'],
         }

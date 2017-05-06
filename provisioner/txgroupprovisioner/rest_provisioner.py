@@ -303,7 +303,7 @@ class RESTProvisioner(object):
                     "Must provide at least one of `provision_group` (account "
                     "provisioning) or `target_group_map` (target_group mapping).")
             # Create the web client.
-            self.make_web_client()
+            self.make_default_web_client()
             self.__target_group_cache = None
             if target_group_map_path:
                 # Create the target_group cache.
@@ -760,20 +760,28 @@ class RESTProvisioner(object):
                     del account_cache[subject]
                     break
 
-    def make_web_agent(self):
+    def make_web_agent(self, endpoint_s, pool=None):
         """
         Configure a `Twisted.web.client.Agent` to be used to make REST calls.
         """
-        self.pool = HTTPConnectionPool(self.reactor)
-        self.agent = Agent.usingEndpointFactory(
+        if pool is None:
+            pool = HTTPConnectionPool(self.reactor)
+        agent = Agent.usingEndpointFactory(
             self.reactor,
-            WebClientEndpointFactory(self.reactor, self.endpoint_s),
-            pool=self.pool)
+            WebClientEndpointFactory(self.reactor, endpoint_s),
+            pool=pool)
+        return (pool, agent)
 
-    def make_web_client(self):
-        self.make_web_agent()
-        self.http_client = treq.client.HTTPClient(self.agent)
+    def make_web_client(self, endpoint_s, pool=None):
+        pool, agent = self.make_web_agent(endpoint_s, pool=pool)
+        http_client = treq.client.HTTPClient(agent)
+        return (pool, agent, http_client)
 
+    def make_default_web_client(self):
+        pool, agent, http_client = self.make_web_agent(self.endpoint_s)
+        self.pool = pool
+        self.agent = agent
+        self.http_client = http_client
 
 @inlineCallbacks
 def delay(reactor, seconds):
