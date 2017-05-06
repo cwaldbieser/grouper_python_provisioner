@@ -126,7 +126,7 @@ class RESTProvisionerFactory(object):
         """
         Create an object that implements IProvisioner
         """
-        provisioner = self.provsioner_factory()
+        provisioner = self.provisioner_factory()
         return provisioner
 
 

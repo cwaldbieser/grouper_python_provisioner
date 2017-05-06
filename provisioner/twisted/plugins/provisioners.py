@@ -5,9 +5,6 @@ ldap_provisioner_factory = LDAPProvisionerFactory()
 from txgroupprovisioner.kiki import KikiProvisionerFactory
 kiki_provisioner_factory = KikiProvisionerFactory()
 
-from txgroupprovisioner.orgsync_provisioner import OrgsyncProvisionerFactory
-orgsync_provisioner_factory = OrgsyncProvisionerFactory()
-
 from txgroupprovisioner.ssh_provisioner import SSHProvisionerFactory
 ssh_provisioner_factory = SSHProvisionerFactory()
 
@@ -16,4 +13,7 @@ board_effect_provisioner_factory = BoardEffectProvisionerFactory()
 
 from txgroupprovisioner.slack_provisioner import SlackProvisionerFactory
 slack_provisioner_factory = SlackProvisionerFactory()
+
+from txgroupprovisioner.o365_provisioner import O365ProvisionerFactory
+o365_provisioner_factory = O365ProvisionerFactory()
 
