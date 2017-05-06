@@ -76,6 +76,10 @@ class UnknowActionError(Exception):
     pass
 
 
+class APIResponseError(Exception):
+    pass
+
+
 @implementer(IAgentEndpointFactory)
 class WebClientEndpointFactory(object):
     """
@@ -140,6 +144,13 @@ class RESTProvisioner(object):
         """
         raise NotImplementedError()
 
+    def get_match_value_from_local_subject(self, subject, attributes):
+        """
+        Given a local subject and attributes, compute the value that
+        will be used to match the remote account to the local subject.
+        """
+        raise NotImplementedError()
+
     def get_api_id_from_remote_account(self, remote_account):
         """
         Given a remote account, `remote_account`, extract the
@@ -147,6 +158,108 @@ class RESTProvisioner(object):
         calls that reference the account.
         """
         raise NotImplementedError()
+
+    @inlineCallbacks
+    def api_get_auth_token(self):
+        """
+        Make API call to obtain valid auth token.
+        Should set `self.auth_token`.
+        """
+        if False:
+            yield None
+        raise NotImplementedError()
+
+    @inlineCallbacks
+    def authorize_api_call(self, method, url, **http_options):
+        """
+        Given the components of an *unauthenticated* HTTP client request, 
+        return the components of an authenticated request.
+
+        Should return a tuple of (method, url, http_options)
+        """
+        if False:
+            yield None
+        raise NotImplementedError()
+
+    @inlineCallbacks
+    def api_get_all_target_groups(self):
+        """
+        Load all target_groups from the sevice.
+        Must return an iterable that yields tuples of
+        (local_group_id, remote_group_id).
+        """
+        if False:
+            yield None
+        raise NotImplementedError()
+    
+    @inlineCallbacks
+    def api_add_subject_to_group(self, subject_id, target_group_id):
+        """
+        Make an authenticated API call to add the remote subject ID
+        to the remote group ID.
+        Should raise on error on failure.
+        """
+        if False:
+            yield None
+        raise NotImplementedError()
+
+    @inlineCallbacks
+    def api_remove_subject_from_group(self, subject_id, target_group_id):
+        """
+        Make an authenticated API call to remove the remote subject ID
+        from the remote group ID.
+        Should raise on error on failure.
+        """
+        if False:
+            yield None
+        raise NotImplementedError()
+
+    @inlineCallbacks
+    def get_subjects_for_target_group(self, target_group_id):
+        """
+        Retireve a list of remote subject IDs that belong to a target_group identified
+        by remote target_group_id.
+        """
+        if False:
+            yield None
+        raise NotImplementedError()
+
+    @inlineCallbacks
+    def get_all_api_ids_and_match_values(self):
+        """
+        Load all the remote subject IDs and match values from the 
+        user accounts that exist on the remote sevice.
+        Returns an iterable of (api_id, match_value).
+        """
+        if False:
+            yield None
+        raise NotImplementedError()
+
+    @inlineCallbacks
+    def api_deprovision_subject(self, api_id):
+        """
+        Make the API call require to deprovision the subject identified by
+        `api_id`.
+        """
+        if False:
+            yield None
+        raise NotImplementedError()
+
+    @inlineCallbacks
+    def api_update_subject(self, subject, api_id, attributes):
+        """
+        Make API request to update remote account.
+        Returns the HTTP response.
+        """
+        if False:
+            yield None
+        raise NotImplementedError()
+
+    def parse_config(self, scp):
+        """
+        Parse any additional configuration this provisioner might need.
+        """
+        pass
 
     def load_config(self, config_file, default_log_level, logObserverFactory):
         """                                                             
@@ -177,20 +290,8 @@ class RESTProvisioner(object):
                 self.endpoint_s = config.get("endpoint", None)
                 self.url_prefix = config["url_prefix"]
                 self.client_secret = config["client_secret"]
-                self.cache_size = int(config["cache_size"])
-                self.accounts_query = config['accounts_query']
-                self.max_page = int(config.get('max_page', 100))
-                self.local_computed_match_template = jinja2.Template(config['local_computed_match_template'])
-                if self.provision_group:
-                    self.account_update = jinja2.Template(config['account_update'])
-                    self.account_delete = jinja2.Template(config['account_delete'])
-                    self.account_add = config['account_add']
-                    account_template_path = config['account_template']
-                    attrib_map_path = config["attribute_map"]
+                self.account_cache_size = int(config["account_cache_size"])
                 if target_group_map_path:
-                    self.target_groups_query = config['target_groups_query']
-                    self.target_group_members = jinja2.Template(config['target_group_members'])
-                    self.target_group_subject = jinja2.Template(config['target_group_subject'])
                     self.target_group_cache_size = int(config.get("target_group_cache_size", 100))
                     self.target_group_retry_delay = int(config.get("target_group_retry_delay", 20))
             except KeyError as ex:
@@ -204,18 +305,13 @@ class RESTProvisioner(object):
             # Create the web client.
             self.make_web_client()
             self.__target_group_cache = None
-            if self.provision_group:
-                # Create the attribute map.
-                self.make_attribute_map(attrib_map_path)
-                # Create the account template.
-                self.make_account_template(account_template_path)
             if target_group_map_path:
                 # Create the target_group cache.
                 self.__target_group_cache = pylru.lrucache(self.target_group_cache_size)
             # Create the target_group map.
             self.make_target_group_map(target_group_map_path)
             # Create account cache.
-            self.__account_cache = pylru.lrucache(self.cache_size)
+            self.__account_cache = pylru.lrucache(self.account_cache_size)
             # Initialize access token.
             self.auth_token = None
         except Exception as ex:
@@ -224,12 +320,6 @@ class RESTProvisioner(object):
             raise
         self.parse_config(scp)
         return defer.succeed(None)
-
-    def parse_config(self, scp):
-        """
-        Parse any additional configuration this provisioner might need.
-        """
-        pass
 
     def make_target_group_map(self, target_group_map_path):
         """
@@ -244,25 +334,6 @@ class RESTProvisioner(object):
         with open(target_group_map_path, "r") as f:
             self.target_group_map = commentjson.load(f)
         log.info("Created source group to target group map.")
-
-    def make_attribute_map(self, path):
-        log = self.log
-        with open(path, "r") as f:
-            doc = commentjson.load(f)
-        self.attribute_map = {}
-        for k, v in doc.items():
-            try:
-                self.attribute_map[k.lower()] = jinja2.Template(v)
-            except jinja2.exceptions.TemplateError as ex:
-                log.error(
-                    "Error parsing attribute template for '{attribute}'",
-                    attribute=k)
-                raise
-                     
-    def make_account_template(self, path):
-        with open(path, "r") as f:
-            data = f.read()
-        self.account_template = jinja2.Template(data)
 
     @inlineCallbacks                                                   
     def provision(self, amqp_message):             
@@ -314,8 +385,8 @@ class RESTProvisioner(object):
     def get_config_defaults(self):
         return dedent("""\
             [PROVISIONER]
-            url_prefix = https://lafayette.boardeffect.com/api/v3
-            cache_size = 1000
+            url_prefix = https://graph.microsoft.com/v1.0
+            account_cache_size = 1000
             """)
 
     def parse_message(self, msg):
@@ -354,74 +425,46 @@ class RESTProvisioner(object):
                 return ParsedSyncWorkroomMessage(action, group, subjects, attributes)
         raise Exception("Could not parse message: {0}".format(msg))
 
-    def map_attributes(self, attribs, subject, action):
-        """
-        Map subject attributes to remote service attributes.
-        Returns attributes mapping.
-        """
-        attrib_map = self.attribute_map
-        props = {}
-        for prop_name, template in attrib_map.items():
-            value = template.render(
-                subject=subject,
-                attributes=attribs,
-                action=action)
-            if value != u'\x00':
-                props[prop_name] = value
-        return props
-
     @inlineCallbacks
     def sync_members(self, subjects, attrib_map):
         """
-        Sync all subects to Board Effect accounts.
-        (Except non-SSO accounts).
+        Sync all local subjects to remote accounts.
+        (Except non-managed accounts).
         """
         log = self.log
         unmanaged_logins = self.unmanaged_logins
         for subject in subjects:
             subject = subject.lower()
-            if subject in unmanaged_logins:
-                continue
             attributes = attrib_map[subject]
             yield self.provision_subject(subject, attributes)
-        local_computed_match_template = self.local_computed_match_template
-        local_match_set = set([])
+        match_set = set([])
         for subject in subjects:
-            local_match = local_computed_match_template.render(
+            match_value = self.get_match_value_from_local_subject(
                 subject=subject,
                 attributes=attrib_map[subject])
-            local_match_set.add(local_match)
-        remote_ids = yield self.get_all_subject_remote_ids()
-        for remote_id, match_value in remote_ids:
+            match_set.add(match_value)
+        api_ids = yield self.get_all_api_ids_and_match_values()
+        for api_id, match_value in api_ids:
             if match_value in unmanaged_logins:
                 continue
-            if not match_value in local_match_set:
-                yield self.deprovision_subject(None, None, remote_id=remote_id) 
+            if not match_value in match_set:
+                yield self.deprovision_subject(None, None, api_id=api_id) 
 
     @inlineCallbacks
     def provision_subject(self, subject, attributes):
         """
-        Provision a subject to Board Effect.
+        Provision a subject to the remote service.
         """
         log = self.log
         log.debug(
             "Attempting to provision subject '{subject}'.",
             subject=subject)
-        remote_id = yield self.fetch_account_id(subject, attributes)
-        if remote_id is not None:
-            yield self.update_subject(subject, remote_id, attributes)
+        api_id = yield self.fetch_account_id(subject, attributes)
+        if api_id is not None:
+            yield self.update_subject(subject, api_id, attributes)
         else:
             yield self.add_subject(subject, attributes)
         returnValue(None)
-
-    @inlineCallbacks
-    def fetch_auth_token(self):
-        """
-        Make API call to obtain valid auth token.
-        """
-        if False:
-            yield None
-        raise NotImplementedError()
 
     def check_401_response(self, response):
         """
@@ -433,32 +476,34 @@ class RESTProvisioner(object):
             self.auth_token = None
             content = yield response.content()
             raise Exception(
-                "Could not obtain auth token.  Response ({code}) was:\n{content}".format(
+                "Unauthorized.  Response ({code}):\n{content}".format(
                     code=resp_code,
                     content=content))
 
     @inlineCallbacks
-    def authorize_api_call(self, method, url, **http_options):
+    def fetch_auth_token(self):
         """
-        Given the components of an *unauthenticated* HTTP client request, 
-        return the components of an authenticated request.
-
-        Should return a tuple of (method, url, http_options)
+        Obtain valid auth token.
+        If `self.auth_token` is not None, this is a no-op.
+        Sets `self.auth_token`.
         """
-        if False:
-            yield None
-        raise NotImplementedError()
+        log = self.log
+        if self.auth_token is None:
+            log.debug("Must obtain auth token ...")
+            yield self.api_get_auth_token()
+            log.debug("Auth token obtained.")
 
     @inlineCallbacks
     def make_authenticate_api_call(self, method, url, **http_options):
         """
-        Given the *unauthenticated* of an HTTP client request, make an
+        Given the components of an HTTP client request, make an
         authenticated request.
         """
         log = self.log
         log.debug("Making authenticated API call ...")
         http_client = self.http_client
         method = method.lower()
+        yield self.fetch_auth_token()
         new_method, new_url, new_http_options = yield self.authorize_api_call(
             method, url, **http_options)
         log.debug(
@@ -470,23 +515,13 @@ class RESTProvisioner(object):
         if response.code == 401:
             log.debug("Got unauthorized response.  Will reauthorize and retry.")
             self.auth_token = None
+            yield self.fetch_auth_token()
             new_method, new_url, new_http_options = yield self.authorize_api_call(
                 method, url, **http_options)
             response = yield getattr(http_client, new_method)(new_url, **new_http_options)
             log.debug("API call complete.  Response code: {code}", code=response.code)
         returnValue(response)
 
-    @inlineCallbacks
-    def fetch_all_target_groups(self):
-        """
-        Load all target_groups from the sevice.
-        Must return an iterable that yields tuples of
-        (local_group_id, remote_group_id).
-        """
-        if False:
-            yield None
-        raise NotImplementedError()
-    
     @inlineCallbacks
     def fetch_target_group_id(self, target_group):
         """
@@ -497,19 +532,19 @@ class RESTProvisioner(object):
         target_group = target_group.lower()
         log.debug("Attempting to fetch existing target_group.")
         target_group_cache = self.__target_group_cache
-        cache_size = self.cache_size
+        cache_size = self.target_group_cache_size
         log.debug("cache max size: {cache_size}", cache_size=cache_size)
         log.debug("cache current size: {cache_size}", cache_size=len(target_group_cache))
         all_groups = None
         if len(target_group_cache) == 0: 
             # Prefill cache.
             log.debug("Prefilling target_group cache ...")
-            all_groups = yield self.fetch_all_target_groups()
-            for local_id, remote_id in all_groups: 
+            all_groups = yield self.api_get_all_target_groups()
+            for local_id, api_id in all_groups: 
                 if len(target_group_cache) >= cache_size:
                     break
                 local_id = local_id.lower()
-                target_group_cache[local_id] = remote_id
+                target_group_cache[local_id] = api_id
             log.debug("Cache size after prefill: {cache_size}", cache_size=len(target_group_cache))
         if target_group in target_group_cache:
             target_group_id = target_group_cache[target_group]
@@ -517,36 +552,26 @@ class RESTProvisioner(object):
         log.debug("Remote ID not in cache for '{target_group}.", target_group=target_group)
         if all_groups is None:
             all_groups = yield self.fetch_all_target_groups()
-        for local_id, remote_id in all_groups:
+        for local_id, api_id in all_groups:
             log.debug("Looping through entries ...")
             local_id = local_id.lower()
             if local_id == target_group:
-                target_group_id = remote_id
-                target_group_cache[target_group] = target_group_id
+                target_group_cache[target_group] = api_id
                 log.debug(
                     "Added entry to target_group cache: {name}: {identifier}", 
                     name=target_group, 
-                    identifier=target_group_id)
-                returnValue(target_group_id)
+                    identifier=api_id)
+                returnValue(api_id)
         returnValue(None)
     
-    @inlineCallbacks
-    def api_add_subject_to_group(self, subject_id, target_group_id):
-        """
-        Make an authenticated API call to add the remote subject ID
-        to the remote group ID.
-        Should raise on error on failure.
-        """
-        if False:
-            yield None
-        raise NotImplementedError()
-
     @inlineCallbacks
     def add_subject_to_target_group(self, target_group, subject, attributes, target_group_id=None, subject_id=None):
         """
         Add a subject to a target_group.
         """
         log = self.log
+        assert (subject is not None) or (subject_id is not None), "Must provide `subject` or `subject_id`!"
+        assert (target_group is not None) or (target_group_id is not None), "Must provide `target_group` or `target_group_id`!"
         if target_group_id is None:
             target_group_id = yield self.fetch_target_group_id(target_group)
             if target_group_id is None:
@@ -561,21 +586,10 @@ class RESTProvisioner(object):
                 subject_id = yield self.fetch_account_id(subject, attributes)
                 if subject_id is None:
                     log.warn(
-                        "Unable to find remote_id for subject '{subject}'.  Discarding ...",
+                        "Unable to find api_id for subject '{subject}'.  Discarding ...",
                         subject=subject)
                     returnValue(None)
         yield self.api_add_subject_to_group(subject_id, target_group_id)
-
-    @inlineCallbacks
-    def api_remove_subject_from_group(self, subject_id, target_group_id):
-        """
-        Make an authenticated API call to remove the remote subject ID
-        from the remote group ID.
-        Should raise on error on failure.
-        """
-        if False:
-            yield None
-        raise NotImplementedError()
 
     @inlineCallbacks
     def remove_subject_from_target_group(self, target_group, subject, attributes, target_group_id=None, subject_id=None):
@@ -584,6 +598,7 @@ class RESTProvisioner(object):
         """
         log = self.log
         assert (subject is not None) or (subject_id is not None), "Must provide `subject` or `subject_id`!"
+        assert (target_group is not None) or (target_group_id is not None), "Must provide `target_group` or `target_group_id`!"
         subject_identifier = subject or subject_id
         if target_group_id is None:
             target_group_id = yield self.fetch_target_group_id(target_group)
@@ -596,7 +611,7 @@ class RESTProvisioner(object):
             subject_id = yield self.fetch_account_id(subject, attributes)
             if subject_id is None:
                 log.warn(
-                    "Unable to find remote_id for subject '{subject}'.  Discarding ...",
+                    "Unable to find api_id for subject '{subject}'.  Discarding ...",
                     subject=subject)
                 returnValue(None)
         yield self.api_remove_subject_from_group(subject_id, target_group_id)
@@ -613,24 +628,24 @@ class RESTProvisioner(object):
                 "Unable to find target_group ID for '{target_group}'.  Discarding ...",
                 target_group=target_group)
             returnValue(None)
-        subject_ids = []
+        subject_api_ids = []
         for subject in subjects:
             subj_attribs = None
             if attributes is not None:
                 subj_attribs = attributes.get(subject, None)
-            subject_id = yield self.fetch_account_id(subject, subj_attribs)
-            if subject_id is None:
+            subject_api_id = yield self.fetch_account_id(subject, subj_attribs)
+            if subject_api_id is None:
                 log.warn(
-                    "Could not find remote ID for subject '{subject}'."
+                    "Could not find api ID for subject '{subject}'."
                     "  Ignoring for sync to target_group.",
                     subject=subject)
                 continue
-            subject_ids.append((subject, subject_id))
+            subject_api_ids.append((subject, subject_api_id))
         log.debug(
             "Adding {count} subjects to target_group '{target_group}' ...",
-            count=len(subject_ids),
+            count=len(subject_api_ids),
             target_group=target_group)
-        for subject, subject_id in subject_ids:
+        for subject, subject_api_id in subject_api_ids:
             subj_attribs = None
             if attributes is not None:
                 subj_attribs = attributes.get(subject, None)
@@ -639,40 +654,17 @@ class RESTProvisioner(object):
                 subject,
                 subj_attribs,
                 target_group_id=target_group_id,
-                subject_id=subject_id)
-        subject_id_set = set(identifier for junk, identifier in subject_ids)
+                subject_id=subject_api_id)
+        subject_api_id_set = set(identifier for junk, identifier in subject_api_ids)
         actual_subject_ids = yield self.get_subjects_for_target_group(target_group_id)
-        for remote_id in actual_subject_ids:
-            if not remote_id in subject_id_set:
-                log.debug(
-                    "Looking up subject for remote_id '{remote_id}' ...",
-                    remote_id=remote_id)
+        for api_id in actual_subject_ids:
+            if not api_id in subject_api_id_set:
                 yield self.remove_subject_from_target_group(
                     target_group,
                     subject=None,
                     attributes=None,
                     target_group_id=target_group_id,
-                    subject_id=remote_id)
-
-    @inlineCallbacks
-    def get_subjects_for_target_group(self, target_group_id):
-        """
-        Retireve a list of remote subject IDs that belong to a target_group identified
-        by remote target_group_id.
-        """
-        if False:
-            yield None
-        raise NotImplementedError()
-
-    @inlineCallbacks
-    def get_all_subject_remote_ids(self):
-        """
-        Load all the remote subject IDs and match values from the 
-        user accounts that exist on the remote sevice.
-        """
-        if False:
-            yield None
-        raise NotImplementedError()
+                    subject_id=api_id)
 
     @inlineCallbacks
     def fetch_account_id(self, subject, attributes):
@@ -682,53 +674,33 @@ class RESTProvisioner(object):
         """
         log = self.log
         log.debug("Attempting to fetch existing account.")
-        local_computed_match = self.local_computed_match_template.render(
-            subject=subject,
-            attributes=attributes)
         account_cache = self.__account_cache
-        cache_size = self.cache_size
+        cache_size = self.account_cache_size
         log.debug("cache max size: {cache_size}", cache_size=cache_size)
         log.debug("cache current size: {cache_size}", cache_size=len(account_cache))
         account_data = None
         if subject in account_cache:
-            remote_id = account_cache[subject]
-            returnValue(remote_id)
+            api_id = account_cache[subject]
+            returnValue(api_id)
         log.debug("Account ID not in cache for '{subject}'.", subject=subject)
-        remote_id = yield self.api_get_account_id(self, subject, attributes)
-        if remote_id is not None:
-            account_cache[subject] = remote_id
-        returnValue(remote_id)
+        api_id = yield self.api_get_account_id(self, subject, attributes)
+        if api_id is not None:
+            account_cache[subject] = api_id
+        returnValue(api_id)
 
     @inlineCallbacks
-    def update_subject(self, subject, remote_id, attributes):
+    def update_subject(self, subject, api_id, attributes):
         """
         Update a remote account.
         """
         log = self.log
-        log.debug("Entered update_subject().")
-        log.debug("Updating subject '{subject}'", subject=subject)
-        props = self.map_attributes(attributes, subject, constants.ACTION_UPDATE)
-        props['active'] = '1'
-        props['preferred_contact_address'] = 'Company'
-        prefix = self.url_prefix
-        url = "{0}{1}".format(
-            prefix,
-            self.account_update.render(
-                remote_id=remote_id,
-                subject=subject,
-                attributes=props))
-        headers = {'Accept': ['application/json']}
-        log.debug("url: {url}", url=url)
-        log.debug("headers: {headers}", headers=headers)
-        log.debug("data: {props}", props=props)
         try:
-            resp = yield self.make_authenticated_api_call(
-                'PUT',  
-                url, 
-                data=props, 
-                headers=headers)
+            resp = yield self.api_update_subject(subject, api_id, attributes)
         except Exception as ex:
-            log.error("Error attempting to update existing account.")
+            log.error(
+                "Error attempting to update subject '{subject}' identified by '{api_id}'.",
+                subject,
+                api_id)
             raise
         resp_code = resp.code
         log.debug("Response code: {code}", code=resp_code)
@@ -740,79 +712,51 @@ class RESTProvisioner(object):
         Add a remote service account.
         """
         log = self.log
-        log.debug("Entered add_subject().")
         log.debug("Adding a new account ...")
-        props = self.map_attributes(attributes, subject, constants.ACTION_ADD)
-        props['active'] = '1'
-        props['preferred_contact_address'] = 'Company'
-        account_doc = self.account_template.render(
-            props=props,
-            subject=subject)
-        log.debug("Account doc: {doc}", doc=account_doc)
-        prefix = self.url_prefix
-        url = "{0}{1}".format(
-            prefix,
-            self.account_add)
-        headers = {
-            'Accept': ['application/json'], 
-            'Content-Type': ['application/json']}
-        log.debug("url: {url}", url=url)
-        log.debug("headers: {headers}", headers=headers)
-        log.debug("data: {account_doc}", account_doc=account_doc)
         try:
-            resp = yield self.make_authenticated_api_call(
-                'POST',
-                url, 
-                data=StringProducer(account_doc.encode('utf-8')), 
-                headers=headers) 
+            api_id = yield api_add_subject(subject, attributes)
         except Exception as ex:
-            log.error("Error attempting to add new account.")
+            log.error(
+                "Error attempting to add subject '{subject}'.",
+                subject=subject)
             raise
-        resp_code = resp.code
-        log.debug("Response code: {code}", code=resp_code)
-        doc = yield resp.json()
-        entry = doc["data"]
-        remote_id = self.get_api_id_from_remote_account(entry)
-        self.__account_cache[subject.lower()] = remote_id
+        if api_id is not None:    
+            self.__account_cache[subject.lower()] = api_id
 
     @inlineCallbacks
-    def api_deprovision_subject(self, remote_id):
-        """
-        Make the API call require to deprovision the subject identified by
-        `remote_id`.
-        """
-        if False:
-            yield None
-        raise NotImplementedError()
-
-    @inlineCallbacks
-    def deprovision_subject(self, subject, attributes, remote_id=None):
+    def deprovision_subject(self, subject, attributes, api_id=None):
         """
         Deprovision a subject from the remote service.
         """
         log = self.log
         log.debug("Entered deprovision_subject().")
-        assert (subject is not None) or (remote_id is not None), (
-            "Must provide `subject` or `remote_id`!")
-        subject_identifier = subject or remote_id
+        assert (subject is not None) or (api_id is not None), (
+            "Must provide `subject` or `api_id`!")
+        subject_identifier = subject or api_id
         log.debug(
             "Attempting to deprovision subject identified by '{identifier}'.",
             identifier=subject_identifier)
-        if remote_id is None:
+        if api_id is None:
             subject = subject.lower()
-            remote_id = yield self.fetch_account_id(subject, attributes)
-        if remote_id is None:
+            api_id = yield self.fetch_account_id(subject, attributes)
+        if api_id is None:
             log.debug("Account '{subject}' does not exist on the remote service.",
                 subject=subject)
             returnValue(None)
-        yield self.api_deprovision_subject(remote_id)
+        try:
+            yield self.api_deprovision_subject(api_id)
+        except Exception as ex:
+            log.error(
+                "Error attempting to de-provision subject identified by '{identifier}'.",
+                identifier=subject_identifier)
+            raise
         account_cache = self.__account_cache
         if not subject is None:
             if subject in account_cache:
                 del account_cache[subject]
         else:
             for subject, r_id in account_cache.items():
-                if remote_id == r_id:
+                if api_id == r_id:
                     del account_cache[subject]
                     break
 
