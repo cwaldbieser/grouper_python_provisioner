@@ -261,7 +261,7 @@ class O365Provisioner(RESTProvisioner):
             'Accept': ['application/json'],
             'Content-Type': ['application/json'],
         }
-        surname = attributes.get("surname", [""])[0]
+        surname = attributes.get("sn", [""])[0]
         givenname = attributes.get("givenName", [""])[0]
         displayname = "{0}, {1}".format(surname, givenname)
         upn = "{0}@{1}".format(subject, self.domain)
@@ -303,7 +303,7 @@ class O365Provisioner(RESTProvisioner):
             'Accept': ['application/json'],
             'Content-Type': ['application/json'],
         }
-        surname = attributes.get("surname", [""])[0]
+        surname = attributes.get("sn", [""])[0]
         givenname = attributes.get("givenName", [""])[0]
         displayname = "{0}, {1}".format(surname, givenname)
         upn = "{0}@{1}".format(subject, self.domain)
@@ -445,17 +445,25 @@ class O365Provisioner(RESTProvisioner):
             headers=headers)
         resp_code = resp.code
         log.debug("Add-subject API response code: {code}", code=resp_code)
+        content = yield resp.content()
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError as ex:
+            parsed = None 
+        is_error = False
         if resp_code != 200:
-            content = yield resp.content()
+            is_error = True
+            if (resp_code == 400) and (not parsed is None):
+                error = parsed.get("error", {})
+                message = error.get("message", None)
+                if message == "User does not have a corresponding license.":
+                    is_error = False
+        if is_error:
             log.error(
                 "API response {code}: {content}", 
                 code=resp_code,
                 content=content)
             raise Exception("API returned status {0}".format(resp_code))
-        else:
-            parsed = yield resp.json()
-            api_id = parsed["id"]
-            returnValue(api_id)
 
     @inlineCallbacks
     def api_get_all_target_groups(self):
