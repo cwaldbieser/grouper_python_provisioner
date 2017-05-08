@@ -49,7 +49,7 @@ class O365Provisioner(RESTProvisioner):
         will be used to match the remote account to the local subject.
         """
         domain = self.domain
-        return "{0}@{1}".format(subject, domain)
+        return subject
 
     def get_api_id_from_remote_account(self, remote_account):
         """
@@ -167,8 +167,7 @@ class O365Provisioner(RESTProvisioner):
                 resp = yield self.make_authenticated_api_call(
                     "GET",
                     url,
-                    headers=headers,
-                    params=params)    
+                    headers=headers)
             except Exception as ex:
                 log.error("Error fetching all remote user data.")
                 raise
@@ -390,7 +389,7 @@ class O365Provisioner(RESTProvisioner):
             data=body, 
             headers=headers)
         resp_code = resp.code
-        log.debug("Add-subject API response code: {code}", code=resp_code)
+        log.debug("Add-license API response code: {code}", code=resp_code)
         if resp_code != 200:
             content = yield resp.content()
             log.error(
@@ -444,7 +443,7 @@ class O365Provisioner(RESTProvisioner):
             data=body, 
             headers=headers)
         resp_code = resp.code
-        log.debug("Add-subject API response code: {code}", code=resp_code)
+        log.debug("Remove-license API response code: {code}", code=resp_code)
         content = yield resp.content()
         try:
             parsed = json.loads(content)
@@ -477,6 +476,66 @@ class O365Provisioner(RESTProvisioner):
         log = self.log  
         rval = [(sku, sku) for sku in self.skus]
         returnValue(rval)
+
+    @inlineCallbacks
+    def get_subjects_for_target_group(self, target_group_id):
+        """
+        Retireve a list of remote subject IDs that belong to a target_group identified
+        by remote target_group_id.
+        """
+        log = self.log
+        log.debug("Attempting to fetch subject API IDs that are members of a target group ...")
+        if target_group_id in self.skus:
+            api_ids = yield self.api_get_subjects_for_license(target_group_id)
+            returnValue(api_ids)
+        raise NotImplementedError()
+    
+    @inlineCallbacks
+    def api_get_subjects_for_license(self, sku):
+        """
+        Get the API IDs for subjects that have the given license.
+        Do NOT include unmanaged logins.
+        """
+        log = self.log
+        http_client = self.http_client
+        prefix = self.url_prefix
+        url = "{0}/users".format(prefix)
+        headers = {
+            'Accept': ['application/json'],
+        }
+        params = {
+            '$select': 'accountEnabled,userPrincipalName,id'
+        }
+        identifiers = []
+        while True:
+            log.debug("URL (GET): {url}", url=url)
+            log.debug("headers: {headers}", headers=headers)
+            try:
+                resp = yield self.make_authenticated_api_call(
+                    "GET",
+                    url,
+                    headers=headers,
+                    params=params)
+            except Exception as ex:
+                log.error("Error fetching all remote user data.")
+                raise
+            parsed = yield resp.json()
+            value = parsed["value"]
+            unmanaged_logins = self.unmanaged_logins
+            for entry in value:
+                api_id = self.get_api_id_from_remote_account(entry)
+                match_value = self.get_match_value_from_remote_account(entry)
+                if match_value in unmanaged_logins:
+                    continue
+                for license in entry.get("assignedLicenses", []):
+                    if license.get("skuId", None) == sku:
+                        identifiers.append(api_id)
+                        break
+            if "@odata.nextLink" in parsed:
+                url = parsed["@odata.nextLink"]
+            else:
+                break
+        returnValue(identifiers)
 
 
 class O365ProvisionerFactory(RESTProvisionerFactory):
