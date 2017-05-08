@@ -1,6 +1,7 @@
 
 from __future__ import print_function
 import json
+import urlparse
 from rest_provisioner import (
     APIResponseError,
     OptionMissingError,
@@ -507,9 +508,11 @@ class O365Provisioner(RESTProvisioner):
             '$select': 'accountEnabled,userPrincipalName,id'
         }
         identifiers = []
+        qs = {}
         while True:
             log.debug("URL (GET): {url}", url=url)
             log.debug("headers: {headers}", headers=headers)
+            params.update(qs)
             try:
                 resp = yield self.make_authenticated_api_call(
                     "GET",
@@ -520,7 +523,11 @@ class O365Provisioner(RESTProvisioner):
                 log.error("Error fetching all remote user data.")
                 raise
             parsed = yield resp.json()
-            value = parsed["value"]
+            try:
+                value = parsed["value"]
+            except Exception as ex:
+                log.debug("No value; parsed: {parsed}", parsed=parsed)
+                raise
             unmanaged_logins = self.unmanaged_logins
             for entry in value:
                 api_id = self.get_api_id_from_remote_account(entry)
@@ -533,6 +540,9 @@ class O365Provisioner(RESTProvisioner):
                         break
             if "@odata.nextLink" in parsed:
                 url = parsed["@odata.nextLink"]
+                p = urlparse.urlparse(url)
+                qs = urlparse.parse_qs(p.query)
+                url = urlparse.urlunparse((p.scheme, p.netloc, p.path, p.params, {}, p.fragment))
             else:
                 break
         returnValue(identifiers)
