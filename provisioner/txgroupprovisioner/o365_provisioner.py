@@ -1,6 +1,9 @@
 
 from __future__ import print_function
+import itertools
 import json
+import random
+import string
 import urlparse
 from rest_provisioner import (
     APIResponseError,
@@ -13,6 +16,19 @@ from twisted.internet.defer import (
     inlineCallbacks, 
     returnValue,
 )
+
+def generate_password():
+    """
+    Generate a random password.
+    """
+    caps = [random.choice(string.ascii_uppercase) for n in range(2)]
+    lowers = [random.choice(string.ascii_lowercase) for n in range(2)]
+    punct = [random.choice(string.punctuation)]
+    digit = [random.choice(string.digits)]
+    others = [random.choice(string.ascii_letters + string.punctuation + string.digits) for n in range(9)]
+    concat = list(itertools.chain(caps, lowers, punct, digit, others))
+    random.shuffle(concat)
+    return ''.join(concat)
 
 
 class O365Provisioner(RESTProvisioner):
@@ -40,7 +56,6 @@ class O365Provisioner(RESTProvisioner):
         """
         match_value = remote_account.get("userPrincipalName", None)
         if match_value is not None:
-            match_value = match_value[:match_value.find('@')]
             return match_value.lower()
         return match_value
 
@@ -50,7 +65,7 @@ class O365Provisioner(RESTProvisioner):
         will be used to match the remote account to the local subject.
         """
         domain = self.domain
-        return subject
+        return "{0}@{1}".format(subject, domain)
 
     def get_api_id_from_remote_account(self, remote_account):
         """
@@ -315,7 +330,7 @@ class O365Provisioner(RESTProvisioner):
             'userPrincipalName': upn,
             'passwordProfile': {
                 "forceChangePasswordNextSignIn": False, 
-                "password": "1ToughPassword!",
+                "password": generate_password(),
             },
             'mailNickname': subject,
             'usageLocation': 'US',
