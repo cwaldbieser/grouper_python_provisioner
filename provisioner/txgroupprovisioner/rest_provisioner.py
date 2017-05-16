@@ -564,7 +564,7 @@ class RESTProvisioner(object):
             returnValue(target_group_id)
         log.debug("Remote ID not in cache for '{target_group}.", target_group=target_group)
         if all_groups is None:
-            all_groups = yield self.spi_get_all_target_groups()
+            all_groups = yield self.api_get_all_target_groups()
         for local_id, api_id in all_groups:
             log.debug("Looping through entries ...")
             local_id = local_id.lower()
