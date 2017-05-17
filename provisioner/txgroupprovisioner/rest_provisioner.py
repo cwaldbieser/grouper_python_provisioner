@@ -141,6 +141,8 @@ class RESTProvisioner(object):
         Given a remote account, `remote_account`, extract the
         value that will be used to match the remote account 
         to the local subject.
+        Returns None if a match value cannot be constructed for the remote
+        account.
         """
         raise NotImplementedError()
 

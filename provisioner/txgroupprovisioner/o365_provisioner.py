@@ -53,10 +53,16 @@ class O365Provisioner(RESTProvisioner):
         Given a remote account, `remote_account`, extract the
         value that will be used to match the remote account 
         to the local subject.
+        Returns None if a match value cannot be constructed for the remote
+        account.
         """
+        log = self.log
+        domain = self.domain
         match_value = remote_account.get("userPrincipalName", None)
         if match_value is not None:
-            return match_value.lower()
+            match_value = match_value.lower()
+            if not match_value.endswith("@{0}".format(domain.lower())):
+                match_value = None
         return match_value
 
     def get_match_value_from_local_subject(self, subject, attributes):
@@ -166,6 +172,8 @@ class O365Provisioner(RESTProvisioner):
         """
         Load all the remote subject IDs and match values from the 
         user accounts that exist on the remote sevice.
+        Note: If a match value cannot be constructed for a remote
+        account, it will not be included in the output of this function.
         """
         log = self.log
         log.debug("Attempting to fetch local IDs from all remote user accounts ...")
@@ -192,7 +200,8 @@ class O365Provisioner(RESTProvisioner):
             for entry in value:
                 api_id = self.get_api_id_from_remote_account(entry)
                 match_value = self.get_match_value_from_remote_account(entry)
-                identifiers.append((api_id, match_value))
+                if not match_value is None:
+                    identifiers.append((api_id, match_value))
             if "@odata.nextLink" in parsed:
                 url = parsed["@odata.nextLink"]
             else:
@@ -548,6 +557,8 @@ class O365Provisioner(RESTProvisioner):
                 api_id = self.get_api_id_from_remote_account(entry)
                 match_value = self.get_match_value_from_remote_account(entry)
                 if match_value in unmanaged_logins:
+                    continue
+                if match_value is None:
                     continue
                 for license in entry.get("assignedLicenses", []):
                     if license.get("skuId", None) == sku:
