@@ -289,6 +289,7 @@ class O365Provisioner(RESTProvisioner):
         givenname = attributes.get("givenName", [""])[0]
         displayname = "{0}, {1}".format(surname, givenname)
         upn = "{0}@{1}".format(subject, self.domain)
+        immutable_id = attributes.get("bannerLNumber", [None])[0]
         props = {
             'accountEnabled': True,
             'displayName': displayname,
@@ -298,6 +299,8 @@ class O365Provisioner(RESTProvisioner):
             'mailNickname': subject,
             'usageLocation': 'US',
         }
+        if not immutable_id is None:
+            props["onPremisesImmutableId"] = immutable_id
         serialized = json.dumps(props)
         body = StringProducer(serialized.encode('utf-8'))
         log.debug("url: {url}", url=url)
@@ -331,6 +334,11 @@ class O365Provisioner(RESTProvisioner):
         givenname = attributes.get("givenName", [""])[0]
         displayname = "{0}, {1}".format(surname, givenname)
         upn = "{0}@{1}".format(subject, self.domain)
+        immutable_id = attributes.get("bannerLNumber", [None])[0]
+        if immutable_id is None:
+            raise Exception(
+                "No immutable ID found for subject '{0}'!".format(subject)
+            )
         props = {
             'accountEnabled': True,
             'displayName': displayname,
@@ -343,6 +351,7 @@ class O365Provisioner(RESTProvisioner):
             },
             'mailNickname': subject,
             'usageLocation': 'US',
+            'onPremisesImmutableId': immutable_id,
         }
         serialized = json.dumps(props)
         body = StringProducer(serialized.encode('utf-8'))
