@@ -111,11 +111,12 @@ class O365Provisioner(RESTProvisioner):
         Should set `self.auth_token`.
         """
         log = self.log
+        domain = self.domain
         if self.http_authn_client is None:
             pool, agent, client = self.make_web_client("tls:host=login.microsoftonline.com:port=443")
             self.http_authn_client = client
         http_client = self.http_authn_client
-        auth_url = "https://login.microsoftonline.com/LafCol.onmicrosoft.com/oauth2/token"
+        auth_url = "https://login.microsoftonline.com/{0}/oauth2/token".format(domain)
         headers = {
             'Accept': ['application/json'],
         }
