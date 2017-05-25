@@ -307,6 +307,9 @@ class RESTProvisioner(object):
                 self.unmanaged_logins = set(
                     login.lower() 
                         for login in config.get("unmanaged_logins", "").split())
+                log.debug(
+                    "unmanaged_logins: {unmanaged_logins}",
+                    unmanaged_logins=list(self.unmanaged_logins))
                 self.provision_group = config.get("provision_group", None)
                 if self.provision_group is not None:
                     self.provision_group = self.provision_group.lower()
