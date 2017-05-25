@@ -210,6 +210,29 @@ class O365Provisioner(RESTProvisioner):
         returnValue(identifiers)
 
     @inlineCallbacks
+    def api_get_remote_account(self, api_id):
+        """
+        Get the remote account information using its API ID.
+        """
+        log = self.log
+        log.debug("Attempting to fetch remote account ...")
+        http_client = self.http_client
+        prefix = self.url_prefix
+        url = "{0}/users/{1}".format(prefix, api_id)
+        headers = {
+            'Accept': ['application/json'],
+        }
+        identifiers = []
+        log.debug("URL (GET): {url}", url=url)
+        log.debug("headers: {headers}", headers=headers)
+        resp = yield self.make_authenticated_api_call(
+            "GET",
+            url,
+            headers=headers)
+        remote_account = yield resp.json()
+        returnValue(remote_account)
+
+    @inlineCallbacks
     def api_deprovision_subject(self, api_id):
         """
         Make the API call require to deprovision the subject identified by

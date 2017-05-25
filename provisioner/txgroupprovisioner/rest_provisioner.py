@@ -270,6 +270,15 @@ class RESTProvisioner(object):
             yield None
         raise NotImplementedError()
 
+    @inlineCallbacks
+    def api_get_remote_account(self, api_id):
+        """
+        Get the remote account information using its API ID.
+        """
+        if False:
+            yield None
+        raise NotImplementedError()
+
     def parse_config(self, scp):
         """
         Parse any additional configuration this provisioner might need.
@@ -474,6 +483,8 @@ class RESTProvisioner(object):
         log.debug(
             "Attempting to provision subject '{subject}'.",
             subject=subject)
+        if self.is_subject_unmanaged(subject, attributes):
+            returnValue(None)
         api_id = yield self.fetch_account_id(subject, attributes)
         if api_id is not None:
             yield self.update_subject(subject, api_id, attributes)
@@ -583,10 +594,14 @@ class RESTProvisioner(object):
     def add_subject_to_target_group(self, target_group, subject, attributes, target_group_id=None, subject_id=None):
         """
         Add a subject to a target_group.
+        `subject_id` may be provided as an optimization.  If it is not 
+        provided, it is looked up using `subject` and `attributes`.
         """
         log = self.log
-        assert (subject is not None) or (subject_id is not None), "Must provide `subject` or `subject_id`!"
+        assert (subject is not None), "Must provide `subject`!"
         assert (target_group is not None) or (target_group_id is not None), "Must provide `target_group` or `target_group_id`!"
+        if self.is_subject_unmanaged(subject, attributes):
+            returnValue(None)
         if target_group_id is None:
             target_group_id = yield self.fetch_target_group_id(target_group)
             if target_group_id is None:
@@ -674,6 +689,9 @@ class RESTProvisioner(object):
         actual_subject_ids = yield self.get_subjects_for_target_group(target_group_id)
         for api_id in actual_subject_ids:
             if not api_id in subject_api_id_set:
+                is_unmanaged = yield self.is_api_id_unmanaged(api_id)
+                if is_unmanaged:
+                    continue
                 yield self.remove_subject_from_target_group(
                     target_group,
                     subject=None,
@@ -709,6 +727,8 @@ class RESTProvisioner(object):
         Update a remote account.
         """
         log = self.log
+        if self.is_subject_unmanaged(subject, attributes):
+            returnValue(None)
         try:
             resp = yield self.api_update_subject(subject, api_id, attributes)
         except Exception as ex:
@@ -724,9 +744,11 @@ class RESTProvisioner(object):
     @inlineCallbacks
     def add_subject(self, subject, attributes):
         """
-        Add a remote service account.
+        Add an account to the remote service.
         """
         log = self.log
+        if self.is_subject_unmanaged(subject, attributes):
+            returnValue(None)
         log.debug("Adding a new account ...")
         try:
             api_id = yield self.api_add_subject(subject, attributes)
@@ -753,6 +775,8 @@ class RESTProvisioner(object):
             identifier=subject_identifier)
         if api_id is None:
             subject = subject.lower()
+            if self.is_subject_unmanaged(subject, attributes):
+                returnValue(None)
             api_id = yield self.fetch_account_id(subject, attributes)
         if api_id is None:
             log.debug("Account '{subject}' does not exist on the remote service.",
@@ -774,6 +798,40 @@ class RESTProvisioner(object):
                 if api_id == r_id:
                     del account_cache[subject]
                     break
+
+    def is_subject_unmanaged(self, subject, attributes):
+        """
+        Returns True if subject is unmanaged; False otherwise.
+        """
+        log = self.log 
+        unmanaged_logins = self.unmanaged_logins
+        subject_match_value = self.get_match_value_from_local_subject(subject, attributes)
+        if subject_match_value in unmanaged_logins:
+            log.debug(
+                "Subject '{subject}' has match value '{match_value}' which is unmanaged.  Skipping ...",
+                subject=subject,
+                match_value=subject_match_value)
+            return True
+        return False
+
+    @inlineCallbacks
+    def is_api_id_unmanaged(self, api_id):
+        """
+        Determine if the remote account identified by its API ID is unmanaged.
+        """
+        log = self.log
+        remote_entry = yield self.api_get_remote_account(api_id)
+        if remote_entry is None:
+            returnValue(False)
+        remote_match_value = self.get_match_value_from_remote_account(remote_entry)
+        unmanaged_logins = self.unmanaged_logins
+        if remote_match_value in unmanaged_logins:
+            log.debug(
+                "Remote account identified by '{api_id}' has match value '{match_value}' which is unmanaged.  Skipping ...",
+                api_id=api_id,
+                match_value=remote_match_value)
+            returnValue(True)
+        returnValue(False)
 
     def make_web_agent(self, endpoint_s, pool=None):
         """
