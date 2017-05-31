@@ -5,6 +5,7 @@ import json
 import random
 import string
 import urlparse
+import commentjson
 from rest_provisioner import (
     APIResponseError,
     OptionMissingError,
@@ -103,6 +104,24 @@ class O365Provisioner(RESTProvisioner):
         else:
             skus = tuple(sku.strip() for sku in skus.split(","))
         self.skus = skus
+        license_products_map = config.get("license_products_map", None)
+        self.disabled_products_map = self.parse_license_products_map(license_products_map)
+
+    def parse_license_products_map(self, license_products_map):
+        """
+        Create a license-to-disabled products map from a path to an external
+        JSON file.
+        """
+        m = {}
+        if license_products_map is None:
+            return m
+        with open(license_products_map, "r") as f:
+             doc = commentjson.load(f)
+        for sku_id, info in doc.items():
+            disabled_products = info.get("disabled_products", None)
+            if not disabled_products is None:
+                m[sku_id] = list(disabled_products)
+        return m
 
     @inlineCallbacks
     def api_get_auth_token(self):
@@ -421,16 +440,18 @@ class O365Provisioner(RESTProvisioner):
         API call to add a license to a user.
         """
         log = self.log
+        disabled_products_map = self.disabled_products_map
         prefix = self.url_prefix
         url = "{0}/users/{1}/assignLicense".format(prefix, subject_id)
         headers = {
             'Accept': ['application/json'],
             'Content-Type': ['application/json'],
         }
+        disabled_products = list(disabled_products_map.get(sku, []))
         props = {
             'addLicenses': [
                 {
-                    "disabledPlans": [], 
+                    "disabledPlans": disabled_products, 
                     "skuId": sku,
                 }
             ],
