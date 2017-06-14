@@ -98,30 +98,27 @@ class O365Provisioner(RESTProvisioner):
             raise OptionMissingError(
                 "The `domain` option is missing!") 
         self.domain = domain
-        skus = config.get("license_skus", None)
-        if skus is None:
-            skus = tuple()
-        else:
-            skus = tuple(sku.strip() for sku in skus.split(","))
-        self.skus = skus
-        license_products_map = config.get("license_products_map", None)
-        self.disabled_products_map = self.parse_license_products_map(license_products_map)
+        license_map = config.get("license_map", None)
+        self.license_map = self.parse_license_map(license_map)
 
-    def parse_license_products_map(self, license_products_map):
+    def parse_license_map(self, license_map):
         """
-        Create a license-to-disabled products map from a path to an external
+        Create a map of psuedo-group-name to license info from a path to an external
         JSON file.
         """
-        m = {}
-        if license_products_map is None:
-            return m
-        with open(license_products_map, "r") as f:
+        if license_map is None:
+            return {}
+        with open(license_map, "r") as f:
              doc = commentjson.load(f)
-        for sku_id, info in doc.items():
-            disabled_products = info.get("disabled_products", None)
-            if not disabled_products is None:
-                m[sku_id] = list(disabled_products)
-        return m
+        for group, info in doc.items():
+            sku = info.get("sku", None)
+            if sku is None:
+                raise Exception(
+                    "License map '{0}': group '{1}' does not have 'sku' property!".format(
+                        license_map,
+                        group)
+                )
+        return doc
 
     @inlineCallbacks
     def api_get_auth_token(self):
@@ -429,25 +426,26 @@ class O365Provisioner(RESTProvisioner):
         """
         log = self.log
         log.debug("Entered: api_add_subject_to_group().")
-        if target_group_id in self.skus:
-            yield self.api_add_license_to_subject(subject_id, target_group_id)
+        license_info = self.license_map.get(target_group_id)
+        if not license_info is None:
+            yield self.api_add_license_to_subject(subject_id, license_info)
         else:
             raise NotImplementedError()
 
     @inlineCallbacks
-    def api_add_license_to_subject(self, subject_id, sku):
+    def api_add_license_to_subject(self, subject_id, license_info):
         """
         API call to add a license to a user.
         """
         log = self.log
-        disabled_products_map = self.disabled_products_map
+        sku = license_info["sku"]
+        disabled_products = license_info.get("disabled_products", [])
         prefix = self.url_prefix
         url = "{0}/users/{1}/assignLicense".format(prefix, subject_id)
         headers = {
             'Accept': ['application/json'],
             'Content-Type': ['application/json'],
         }
-        disabled_products = list(disabled_products_map.get(sku, []))
         props = {
             'addLicenses': [
                 {
@@ -490,17 +488,19 @@ class O365Provisioner(RESTProvisioner):
         """
         log = self.log
         log.debug("Entered: api_add_subject_to_group().")
-        if target_group_id in self.skus:
-            yield self.api_remove_license_from_subject(subject_id, target_group_id)
+        license_info = self.license_map.get(target_group_id)
+        if not license_info is None:
+            yield self.api_remove_license_from_subject(subject_id, license_info)
         else:
             raise NotImplementedError()
 
     @inlineCallbacks
-    def api_remove_license_from_subject(self, subject_id, sku):
+    def api_remove_license_from_subject(self, subject_id, license_info):
         """
         API call to remove a license from a user.
         """
         log = self.log
+        sku = license_info["sku"]
         prefix = self.url_prefix
         url = "{0}/users/{1}/assignLicense".format(prefix, subject_id)
         headers = {
@@ -553,7 +553,7 @@ class O365Provisioner(RESTProvisioner):
         if False:
             yield "Can't wait for async/await!"
         log = self.log  
-        rval = [(sku, sku) for sku in self.skus]
+        rval = [(tgroup, tgroup) for tgroup in self.license_map.keys()]
         returnValue(rval)
 
     @inlineCallbacks
@@ -564,18 +564,21 @@ class O365Provisioner(RESTProvisioner):
         """
         log = self.log
         log.debug("Attempting to fetch subject API IDs that are members of a target group ...")
-        if target_group_id in self.skus:
-            api_ids = yield self.api_get_subjects_for_license(target_group_id)
+        license_info = self.license_map.get(target_group_id)
+        if not license_info is None:
+            api_ids = yield self.api_get_subjects_for_license(license_info)
             returnValue(api_ids)
         raise NotImplementedError()
     
     @inlineCallbacks
-    def api_get_subjects_for_license(self, sku):
+    def api_get_subjects_for_license(self, license_info):
         """
         Get the API IDs for subjects that have the given license.
         Do NOT include unmanaged logins.
         """
         log = self.log
+        sku = license_info["sku"]
+        disabled_products = set(license_info.get("disabled_products", []))
         http_client = self.http_client
         prefix = self.url_prefix
         url = "{0}/users".format(prefix)
@@ -616,8 +619,10 @@ class O365Provisioner(RESTProvisioner):
                     continue
                 for license in entry.get("assignedLicenses", []):
                     if license.get("skuId", None) == sku:
-                        identifiers.append(api_id)
-                        break
+                        azure_disabled_plans = set(license.get("disabledPlans", []))
+                        if disabled_products == azure_disabled_plans:
+                            identifiers.append(api_id)
+                            break
             if "@odata.nextLink" in parsed:
                 url = parsed["@odata.nextLink"]
                 p = urlparse.urlparse(url)
