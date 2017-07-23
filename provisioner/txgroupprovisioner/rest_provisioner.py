@@ -495,13 +495,13 @@ class RESTProvisioner(object):
             yield self.add_subject(subject, attributes)
         returnValue(None)
 
-    def check_401_response(self, response):
+    def check_unauthorized_response(self, response):
         """
-        Check if an API response is 401 - Unauthorized.
+        Check if an API response is 4xx representing unauthorized.
         If so, raise an exception.
         """
         log = self.log
-        if response.code == 401:
+        if response.code in (401, 419):
             self.auth_token = None
             content = yield response.content()
             raise Exception(
@@ -541,7 +541,7 @@ class RESTProvisioner(object):
             url=new_url)
         response = yield getattr(http_client, new_method)(new_url, **new_http_options)
         log.debug("API call complete.  Response code: {code}", code=response.code)
-        if response.code == 401:
+        if response.code in (401, 419):
             log.debug("Got unauthorized response.  Will reauthorize and retry.")
             self.auth_token = None
             yield self.fetch_auth_token()

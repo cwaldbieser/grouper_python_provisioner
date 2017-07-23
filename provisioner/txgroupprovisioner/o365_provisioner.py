@@ -159,7 +159,7 @@ class O365Provisioner(RESTProvisioner):
             self.auth_token = doc["access_token"]
             log.debug("New auth token obtained.")
         else:
-            self.check_401_response(response)
+            self.check_unauthorized_response(response)
             content = yield response.content()
             raise Exception(
                 "Unable to obtain valid auth token.  Response {0}: {1}".format(
