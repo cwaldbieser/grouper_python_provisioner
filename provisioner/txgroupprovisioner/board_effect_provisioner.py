@@ -455,7 +455,7 @@ class BoardEffectProvisioner(object):
                 auth_token =  self.__auth_token
                 log.debug("New auth token obtained.")
             else:
-                self.check_401_response(response)
+                self.check_unauthorized_response(response)
                 content = yield response.content()
                 raise Exception(
                     "Unable to obtain valid auth token.  Response {0}: {1}".format(
@@ -479,7 +479,7 @@ class BoardEffectProvisioner(object):
         log.debug("Making API call.  method: {method}, URL: {url}", method=method, url=url)
         response = yield getattr(http_client, method)(url, **http_options)
         log.debug("API call complete.  Response code: {code}", code=response.code)
-        if response.code == 401:
+        if response.code in (401, 419):
             log.debug("Got unauthorized response.  Will reauthorize and retry.")
             self.__auth_token = None
             yield self.fetch_auth_token()
@@ -489,13 +489,13 @@ class BoardEffectProvisioner(object):
             log.debug("API call complete.  Response code: {code}", code=response.code)
         returnValue(response)
 
-    def check_401_response(self, response):
+    def check_unauthorized_response(self, response):
         """
-        Check if an API response is 401 - Unauthorized.
+        Check if an API response is a form of unauthorized.
         If so, raise an exception.
         """
         log = self.log
-        if response.code == 401:
+        if response.code in (401, 419):
             self.__auth_token = None
             content = yield response.content()
             raise Exception(
