@@ -17,3 +17,5 @@ slack_provisioner_factory = SlackProvisionerFactory()
 from txgroupprovisioner.o365_provisioner import O365ProvisionerFactory
 o365_provisioner_factory = O365ProvisionerFactory()
 
+from txgroupprovisioner.moodle_provisioner import MoodleProvisionerFactory
+moodle_provisioner_factory = MoodleProvisionerFactory()
