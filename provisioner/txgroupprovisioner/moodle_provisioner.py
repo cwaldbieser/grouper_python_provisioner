@@ -146,7 +146,7 @@ class MoodleProvisioner(RESTProvisioner):
         data = {
             'wsfunction': 'core_user_get_users_by_field',
             'field': 'username',
-             'values[0]': app_id 
+             'values[0]': api_id 
         }
         log.debug("URL (GET): {url}", url=url)
         log.debug("headers: {headers}", headers=headers)
@@ -192,7 +192,7 @@ class MoodleProvisioner(RESTProvisioner):
         data = {
             'wsfunction': 'core_user_get_users_by_field',
             'field': 'username',
-             'values[0]': app_id 
+             'values[0]': subject 
         }
         log.debug("URL (GET): {url}", url=url)
         log.debug("headers: {headers}", headers=headers)
