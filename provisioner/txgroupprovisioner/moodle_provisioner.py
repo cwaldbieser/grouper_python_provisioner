@@ -13,10 +13,24 @@ from rest_provisioner import (
     RESTProvisionerFactory, 
     StringProducer,
 )
+from  six.moves.urllib.parse import urlencode
 from twisted.internet.defer import (
     inlineCallbacks, 
     returnValue,
 )
+
+
+class FakeResponse(object):
+    """
+    A minimal fake HTTP response
+    """
+    code = 200
+
+    @inlineCallbacks
+    def content(self):
+        if False:
+            yield None
+
 
 def generate_password():
     """
@@ -100,8 +114,6 @@ class MoodleProvisioner(RESTProvisioner):
         log.debug("Authorizing API call ...")
         if False:
             yield "Required for inlineCallbacks-- can't wait for async/await!"
-        data = http_options.setdefault("data", {})
-        data['wstoken'] = self.auth_token
         returnValue((method, url, http_options))
 
     @inlineCallbacks
@@ -117,15 +129,19 @@ class MoodleProvisioner(RESTProvisioner):
         it can safely return an empty list.
         """
         log = self.log
+        if False:
+            yield None
         returnValue([])
 
-    def check_for_error_response(json_doc):
+    def check_for_error_response(self, json_doc):
         """
         Check if the JSON response contains an error message.
         If so, raise an exception.
         """
         if 'errorcode' in json_doc:
-            raise Exception(json_doc['errorcode'])
+            raise Exception("{0} - {0}".format(
+                json_doc['errorcode'],
+                json_doc['message']))
 
     @inlineCallbacks
     def api_get_remote_account(self, api_id):
@@ -144,21 +160,26 @@ class MoodleProvisioner(RESTProvisioner):
             'moodlewsrestformat': 'json'
         }
         data = {
+            'wstoken': self.client_secret,
             'wsfunction': 'core_user_get_users_by_field',
             'field': 'username',
-             'values[0]': app_id 
+             'values[0]': api_id 
         }
-        log.debug("URL (GET): {url}", url=url)
+        log.debug("URL (POST): {url}", url=url)
         log.debug("headers: {headers}", headers=headers)
+        log.debug("params: {params}", params=params)
+        log.debug("data: {data}", data=data)
         resp = yield self.make_authenticated_api_call(
             "POST",
             url,
             headers=headers,
             params=params,
             data=data)
-        remote_account = yield resp.json()
-        self.check_for_error_response(remote_account)
-        returnValue(remote_account)
+        remote_accounts = yield resp.json()
+        self.check_for_error_response(remote_accounts)
+        if len(remote_accounts) == 0:
+            returnValue(None)
+        returnValue(remote_accounts[0])
 
     @inlineCallbacks
     def api_deprovision_subject(self, api_id):
@@ -178,6 +199,7 @@ class MoodleProvisioner(RESTProvisioner):
         Fetch the remote ID for a subject.
         Return None if the account does not exist on the remote end.
         """
+        print("PATH B")
         log = self.log
         log.debug("Attempting to fetch remote account ...")
         http_client = self.http_client
@@ -190,21 +212,27 @@ class MoodleProvisioner(RESTProvisioner):
             'moodlewsrestformat': 'json'
         }
         data = {
+            'wstoken': self.client_secret,
             'wsfunction': 'core_user_get_users_by_field',
             'field': 'username',
-             'values[0]': app_id 
+             'values[0]': subject 
         }
-        log.debug("URL (GET): {url}", url=url)
+        log.debug("URL (POST): {url}", url=url)
         log.debug("headers: {headers}", headers=headers)
+        log.debug("params: {params}", params=params)
+        log.debug("data: {data}", data=data)
         resp = yield self.make_authenticated_api_call(
             "POST",
             url,
             headers=headers,
             params=params,
             data=data)
-        remote_account = yield resp.json()
-        self.check_for_error_response(remote_account)
-        returnValue(remote_account.get('username', None))
+        remote_accounts = yield resp.json()
+        self.check_for_error_response(remote_accounts)
+        if len(remote_accounts) == 0:
+            returnValue(None)
+        print("REMOTE_ACCOUNTS: {0}".format(remote_accounts))
+        returnValue(remote_accounts[0].get('username', None))
 
     @inlineCallbacks
     def api_update_subject(self, subject, api_id, attributes):
@@ -217,6 +245,7 @@ class MoodleProvisioner(RESTProvisioner):
         log = self.log
         if False:
             yield None
+        returnValue(FakeResponse())
 
     @inlineCallbacks
     def api_add_subject(self, subject, attributes):
@@ -239,15 +268,21 @@ class MoodleProvisioner(RESTProvisioner):
             'moodlewsrestformat': 'json'
         }
         data = {
+            'wstoken': self.client_secret,
             'wsfunction': 'core_user_create_users',
             'users[0][username]': subject,
             'users[0][firstname]': attributes.get("givenName", [""])[0],
             'users[0][lastname]': attributes.get("sn", [""])[0],
             'users[0][email]': attributes.get("mail", [""])[0],
+            'users[0][customfields][0][type]': 'lnumber',
+            'users[0][customfields][0][value]': attributes.get("bannerLNumber", [""])[0],
             'users[0][password]': generate_password(),
+            'users[0][auth]': 'casattras',
         }
         log.debug("URL (GET): {url}", url=url)
         log.debug("headers: {headers}", headers=headers)
+        log.debug("params: {params}", params=params)
+        log.debug("data: {data}", data=data)
         resp = yield self.make_authenticated_api_call(
             "POST",
             url,
