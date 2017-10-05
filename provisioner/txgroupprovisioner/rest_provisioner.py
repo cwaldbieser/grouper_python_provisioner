@@ -135,6 +135,8 @@ class RESTProvisioner(object):
     service_state = None
     reactor = None
     log = None
+    account_sync_rate_limit_ms = 0
+    member_sync_rate_limit_ms = 0
 
     def get_match_value_from_remote_account(self, remote_account):
         """
@@ -321,6 +323,8 @@ class RESTProvisioner(object):
                 if target_group_map_path:
                     self.target_group_cache_size = int(config.get("target_group_cache_size", 100))
                     self.target_group_retry_delay = int(config.get("target_group_retry_delay", 20))
+                self.account_sync_rate_limit_ms = int(config.get("account_sync_rate_limit_ms", 0))
+                self.member_sync_rate_limit_ms = int(config.get("member_sync_rate_limit_ms", 0))
             except KeyError as ex:
                 raise OptionMissingError(
                     "A require option was missing: '{0}:{1}'.".format(
@@ -459,13 +463,26 @@ class RESTProvisioner(object):
         (Except non-managed accounts).
         """
         log = self.log
+        reactor = self.reactor
         unmanaged_logins = self.unmanaged_logins
-        for subject in subjects:
+        subject_list = [s.lower() for s in subjects]
+        subject_list.sort()
+        rate_limit_ms = self.account_sync_rate_limit_ms
+        if rate_limit_ms != 0:
+            rate_limit_td = datetime.timedelta(milliseconds=rate_limit_ms)
+        else:
+            rate_limit_td = None
+        process_next_at = None
+        for subject in subject_list:
             subject = subject.lower()
             attributes = attrib_map[subject]
+            if not process_next_at is None:
+                yield delayUntil(reactor, process_next_at)
             yield self.provision_subject(subject, attributes)
+            if not rate_limit_td is None:
+                process_next_at = datetime.datetime.today() + rate_limit_td
         match_set = set([])
-        for subject in subjects:
+        for subject in subject_list:
             match_value = self.get_match_value_from_local_subject(
                 subject=subject,
                 attributes=attrib_map[subject])
@@ -475,7 +492,11 @@ class RESTProvisioner(object):
             if match_value in unmanaged_logins:
                 continue
             if not match_value in match_set:
+                if not process_next_at is None:
+                    yield delayUntil(reactor, process_next_at)
                 yield self.deprovision_subject(None, None, api_id=api_id) 
+                if not rate_limit_td is None:
+                    process_next_at = datetime.datetime.today() + rate_limit_td
 
     @inlineCallbacks
     def provision_subject(self, subject, attributes):
@@ -655,6 +676,13 @@ class RESTProvisioner(object):
         Sync target_group membership.
         """
         log = self.log
+        reactor = self.reactor
+        rate_limit_ms = self.member_sync_rate_limit_ms
+        if rate_limit_ms != 0:
+            rate_limit_td = datetime.timedelta(milliseconds=rate_limit_ms)
+        else:
+            rate_limit_td = None
+        process_next_at = None
         target_group_id = yield self.fetch_target_group_id(target_group)
         if target_group_id is None:
             log.warn(
@@ -662,6 +690,8 @@ class RESTProvisioner(object):
                 target_group=target_group)
             returnValue(None)
         subject_api_ids = []
+        subject_list = list(subjects)
+        subject_list.sort()
         for subject in subjects:
             subj_attribs = None
             if attributes is not None:
@@ -682,12 +712,16 @@ class RESTProvisioner(object):
             subj_attribs = None
             if attributes is not None:
                 subj_attribs = attributes.get(subject, None)
+            if not process_next_at is None:
+                yield delayUntil(reactor, process_next_at)
             yield self.add_subject_to_target_group(
                 target_group,
                 subject,
                 subj_attribs,
                 target_group_id=target_group_id,
                 subject_id=subject_api_id)
+            if not rate_limit_td is None:
+                process_next_at = datetime.datetime.today() + rate_limit_td
         subject_api_id_set = set(identifier for junk, identifier in subject_api_ids)
         actual_subject_ids = yield self.get_subjects_for_target_group(target_group_id)
         for api_id in actual_subject_ids:
@@ -695,12 +729,16 @@ class RESTProvisioner(object):
                 is_unmanaged = yield self.is_api_id_unmanaged(api_id)
                 if is_unmanaged:
                     continue
+                if not process_next_at is None:
+                    yield delayUntil(reactor, process_next_at)
                 yield self.remove_subject_from_target_group(
                     target_group,
                     subject=None,
                     attributes=None,
                     target_group_id=target_group_id,
                     subject_id=api_id)
+                if not rate_limit_td is None:
+                    process_next_at = datetime.datetime.today() + rate_limit_td
 
     @inlineCallbacks
     def fetch_account_id(self, subject, attributes):
@@ -866,3 +904,19 @@ def delay(reactor, seconds):
     """
     yield task.deferLater(reactor, seconds, lambda : None)
 
+@inlineCallbacks
+def delayUntil(reactor, t):
+    """
+    Delay until time `t`.
+    If `t` is None, don't delay.
+
+    `params t`: A datetime object or None
+    """
+    if t is None:
+        returnValue(None)
+    instant = datetime.datetime.today()
+    if instant < t:
+        td = t - instant
+        delay_seconds = td.total_seconds()
+        yield task.deferLater(reactor, delay_seconds, lambda : None)
+    
