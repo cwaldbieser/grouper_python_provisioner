@@ -38,6 +38,7 @@ class GroupProvisionerService(Service):
     consumerTag = "mytag"
     max_amqp_delay = 30
     amqp_delay_increment = 5
+    amqp_rate_limit_ms = None
 
     def __init__(
             self, 
@@ -110,6 +111,7 @@ class GroupProvisionerService(Service):
         log = Logger(observer=self.logObserverFactory(log_level))
         self.log = log
         self.amqp_info = section2dict(scp, "AMQP")
+        self.amqp_rate_limit_ms = self.amqp_info.get("rate_limit_ms", None) 
         amqp_log_level = self.amqp_info.get("log_level", log_level) 
         self.amqp_log = Logger(observer=self.logObserverFactory(amqp_log_level))
         service_state = self.service_state 
@@ -261,7 +263,18 @@ class GroupProvisionerService(Service):
         log.debug('Received: "{msg}" from channel # {channel}.', msg=msg.content.body, channel=channel.id)
         delay = 0
         recorded = False
+        if not self.amqp_rate_limit_ms is None:
+            rate_limit_td = datetime.timedelta(milliseconds=self.amqp_rate_limit_ms)
+        else:
+            rate_limit_td = None
+        process_next_mesage_at = None
         while not recorded and service_state.read_from_queue and not service_state.stopping:
+            if not process_next_message_at is None:
+                t = datetime.datetime.today()
+                if t < process_next_message_at:
+                    td = process_next_message_at - t
+                    delay_seconds = td.total_seconds()
+                    yield task.deferLater(reactor, delay_seconds, lambda : None)
             try:
                 yield task.deferLater(reactor, delay, provisioner.provision, msg)
             except Exception as ex:
@@ -272,6 +285,8 @@ class GroupProvisionerService(Service):
                 delay = 0    
                 yield channel.basic_ack(delivery_tag=msg.delivery_tag)
                 log.debug("Message from queue recorded.")
+                if rate_limit_td is not None:
+                    process_next_message_at = datetime.datetime.today() + rate_limit_td
         if not recorded:
            yield channel.basic_reject(delivery_tag=msg.delivery_tag, requeue=True) 
         
