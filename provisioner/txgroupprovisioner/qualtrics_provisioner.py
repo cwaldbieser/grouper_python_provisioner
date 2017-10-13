@@ -73,8 +73,8 @@ class QualtricsProvisioner(RESTProvisioner):
         Given a local subject and attributes, compute the value that
         will be used to match the remote account to the local subject.
         """
-        org_id = self.org_id
-        return "{0}@{1}".format(subject, org_id)
+        organization = self.organization
+        return "{0}#{1}".format(subject, organization)
 
     def get_api_id_from_remote_account(self, remote_account):
         """
@@ -94,10 +94,12 @@ class QualtricsProvisioner(RESTProvisioner):
         if organization is None:
             raise OptionMissingError(
                 "The `organization` option is missing!") 
+        self.organization = organization
         new_user_type = config.get("new_user_type", None)
         if new_user_type is None:
             raise OptionMissingError(
-                "The `new_user_type` option is missing!") 
+                "The `new_user_type` option is missing!")
+        self.new_user_type = new_user_type
         language = config.get("language", 'en')
         self.language = language
 
@@ -244,7 +246,11 @@ class QualtricsProvisioner(RESTProvisioner):
         log = self.log
         computed_match_value = self.get_match_value_from_local_subject(subject, attributes)
         results = yield self.get_all_api_ids_and_match_values()
-        for api_id, match_value in results:
+        log.debug("computed_match_value={computed_match_value}", computed_match_value=computed_match_value)
+        log.debug("len(results) == {size}", size=len(results))
+        for n, (api_id, match_value) in enumerate(results):
+            if n == 0:
+                log.debug("First result checked is {api_id}, {match_value}", api_id=api_id, match_value=match_value)
             if computed_match_value == match_value:
                 returnValue(api_id)
 
@@ -267,7 +273,7 @@ class QualtricsProvisioner(RESTProvisioner):
         givenname = attributes.get("givenName", [""])[0]
         email = attributes.get("mail", [""])[0]
         props = {
-            'firstName': givenName,
+            'firstName': givenname,
             'lastName': surname,
             'email': email,
             'username': username,
@@ -310,7 +316,7 @@ class QualtricsProvisioner(RESTProvisioner):
         props = {
             'username': username,
             'password': generate_password(),
-            'firstName': givenName,
+            'firstName': givenname,
             'lastName': surname,
             'userType': self.new_user_type,
             'email': email,
