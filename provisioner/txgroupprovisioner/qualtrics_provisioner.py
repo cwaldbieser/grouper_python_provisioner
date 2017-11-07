@@ -343,6 +343,9 @@ class QualtricsProvisioner(RESTProvisioner):
             raise Exception("API returned status {0}".format(resp_code))
         else:
             parsed = yield resp.json()
+            if not "id" in parsed:
+                raise Exception("Error in `api_add_subject()`: {}".format(
+                    json.dumps(parsed))) 
             api_id = parsed["id"]
             returnValue(api_id)
 
