@@ -763,6 +763,14 @@ class RESTProvisioner(object):
             account_cache[subject] = api_id
         returnValue(api_id)
 
+    def get_subject_api_id_from_cache(self, subject):
+        """
+        Return the API ID for a subject or None if it is not in the cache.
+        """
+        log = self.log
+        account_cache = self.__account_cache
+        return account_cache.get(subject, None)
+
     def fill_account_cache(self, account_id_map):
         """
         Sometimes, a service API only allows looking up a complete list of
