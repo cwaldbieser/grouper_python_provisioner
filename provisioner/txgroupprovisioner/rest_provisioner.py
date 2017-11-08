@@ -9,6 +9,7 @@ from textwrap import dedent
 import traceback
 import attr
 import pylru
+from six import iteritems
 import treq
 from twisted.internet import defer, task
 from twisted.internet.defer import (
@@ -761,6 +762,23 @@ class RESTProvisioner(object):
         if api_id is not None:
             account_cache[subject] = api_id
         returnValue(api_id)
+
+    def fill_account_cache(self, account_id_map):
+        """
+        Sometimes, a service API only allows looking up a complete list of
+        accounts.  In this case, it can make sense for subclasses of the
+        `RESTProvisioner` to fill the cache with the queried information
+        rather than looking it up multiple times.
+
+        `account_id_map` should be a mapping of subjects to API IDs.
+        
+        The cache will not be filled beyond its capacity.
+        """
+        log = self.log
+        log.debug("Filling account cache with {size} entries ...", size=len(account_id_map))
+        account_cache = self.__account_cache
+        for subject, api_id in iteritems(account_id_map):
+            account_cache[subject] = api_id
 
     @inlineCallbacks
     def update_subject(self, subject, api_id, attributes):

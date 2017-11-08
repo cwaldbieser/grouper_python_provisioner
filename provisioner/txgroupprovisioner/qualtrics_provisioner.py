@@ -249,6 +249,7 @@ class QualtricsProvisioner(RESTProvisioner):
         results = yield self.get_all_api_ids_and_match_values()
         log.debug("computed_match_value={computed_match_value}", computed_match_value=computed_match_value)
         log.debug("len(results) == {size}", size=len(results))
+        self.fill_account_cache(dict(results))
         for api_id, match_value in results:
             if computed_match_value == match_value:
                 log.debug("Match value found.")
