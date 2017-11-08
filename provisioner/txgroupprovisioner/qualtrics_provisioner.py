@@ -165,8 +165,9 @@ class QualtricsProvisioner(RESTProvisioner):
             http_status = meta["httpStatus"]
             if http_status != "200 - OK":
                 raise Exception("Error making API call to fetch all users: {}".format(http_status))
-            elements = parsed['result']['elements']
-            next_page = parsed.get('nextPage', None)
+            result = parsed['result']
+            elements = result['elements']
+            next_page = result.get('nextPage', None)
             for entry in elements:
                 api_id = self.get_api_id_from_remote_account(entry)
                 match_value = self.get_match_value_from_remote_account(entry)
@@ -248,11 +249,12 @@ class QualtricsProvisioner(RESTProvisioner):
         results = yield self.get_all_api_ids_and_match_values()
         log.debug("computed_match_value={computed_match_value}", computed_match_value=computed_match_value)
         log.debug("len(results) == {size}", size=len(results))
-        for n, (api_id, match_value) in enumerate(results):
-            if n == 0:
-                log.debug("First result checked is {api_id}, {match_value}", api_id=api_id, match_value=match_value)
+        for api_id, match_value in results:
             if computed_match_value == match_value:
+                log.debug("Match value found.")
                 returnValue(api_id)
+        log.debug("No match found.")
+        returnValue(None)
 
     @inlineCallbacks
     def api_update_subject(self, subject, api_id, attributes):
