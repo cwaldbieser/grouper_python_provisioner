@@ -138,6 +138,7 @@ class RESTProvisioner(object):
     log = None
     account_sync_rate_limit_ms = 0
     member_sync_rate_limit_ms = 0
+    provision_strategy = "query-first"
 
     def get_match_value_from_remote_account(self, remote_account):
         """
@@ -326,6 +327,7 @@ class RESTProvisioner(object):
                     self.target_group_retry_delay = int(config.get("target_group_retry_delay", 20))
                 self.account_sync_rate_limit_ms = int(config.get("account_sync_rate_limit_ms", 0))
                 self.member_sync_rate_limit_ms = int(config.get("member_sync_rate_limit_ms", 0))
+                self.provision_strategy = config.get("provision_strategy", "query-first").lower()
             except KeyError as ex:
                 raise OptionMissingError(
                     "A require option was missing: '{0}:{1}'.".format(
@@ -334,6 +336,8 @@ class RESTProvisioner(object):
                 raise OptionMissingError(
                     "Must provide at least one of `provision_group` (account "
                     "provisioning) or `target_group_map` (target_group mapping).")
+            if not self.provision_strategy in ('query-first', 'create-first'):
+                raise Exception("`provision_strategy` must be one of: query-first, create-first")
             # Create the web client.
             self.make_default_web_client()
             self.__target_group_cache = None
@@ -505,17 +509,35 @@ class RESTProvisioner(object):
         Provision a subject to the remote service.
         """
         log = self.log
+        provision_strategy = self.provision_strategy
         log.debug(
-            "Attempting to provision subject '{subject}'.",
-            subject=subject)
+            "Attempting to provision subject '{subject}' with strategy {strategy}.",
+            subject=subject,
+            strategy=provision_strategy)
         if self.is_subject_unmanaged(subject, attributes):
             returnValue(None)
-        api_id = yield self.fetch_account_id(subject, attributes)
-        if api_id is not None:
+        api_id = yield self.get_account_id_from_cache(subject)
+        if not api_id is None:
             yield self.update_subject(subject, api_id, attributes)
+            returnValue(None)
+        elif provision_strategy == 'query-first':
+            api_id = yield self.fetch_account_id(subject, attributes)
+            if api_id is not None:
+                yield self.update_subject(subject, api_id, attributes)
+            else:
+                yield self.add_subject(subject, attributes)
+            returnValue(None)
+        elif provision_strategy == 'create-first':
+            try:
+                yield self.add_subject(subject, attributes)
+            except Exception as ex:
+                api_id = yield self.fetch_account_id(subject, attributes)
+                if api_id is not None:
+                    yield self.update_subject(subject, api_id, attributes)
+                else:
+                    raise Exception("Could not create remote account nor query matching API ID for '{}'.".format(subject))
         else:
-            yield self.add_subject(subject, attributes)
-        returnValue(None)
+            raise Exception("Unknown strategy '{}'.".format(provision_strategy))
 
     def check_unauthorized_response(self, response):
         """
@@ -741,14 +763,13 @@ class RESTProvisioner(object):
                 if not rate_limit_td is None:
                     process_next_at = datetime.datetime.today() + rate_limit_td
 
-    @inlineCallbacks
-    def fetch_account_id(self, subject, attributes):
+    def get_account_id_from_cache(self, subject):
         """
-        Fetch an existing remote account ID and return it or None if the remote 
-        account does not exist.
+        Fetch an existing remote account ID from the cache and return it 
+        or None if the remote account does not exist.
         """
         log = self.log
-        log.debug("Attempting to fetch existing account.")
+        log.debug("Attempting to fetch existing account from cache.")
         account_cache = self.__account_cache
         cache_size = self.account_cache_size
         log.debug("cache max size: {cache_size}", cache_size=cache_size)
@@ -756,8 +777,20 @@ class RESTProvisioner(object):
         account_data = None
         if subject in account_cache:
             api_id = account_cache[subject]
-            returnValue(api_id)
+            return api_id
         log.debug("Account ID not in cache for '{subject}'.", subject=subject)
+
+    @inlineCallbacks
+    def fetch_account_id(self, subject, attributes):
+        """
+        Fetch an existing remote account ID and return it or None if the remote 
+        account does not exist.
+        """
+        log = self.log
+        api_id = self.get_account_id_from_cache(subject)
+        if not api_id is None:
+            returnValue(api_id)
+        account_cache = self.__account_cache
         api_id = yield self.api_get_account_id(subject, attributes)
         if api_id is not None:
             account_cache[subject] = api_id
