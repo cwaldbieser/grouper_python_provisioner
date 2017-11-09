@@ -247,7 +247,7 @@ class QualtricsProvisioner(RESTProvisioner):
         log = self.log
         cached_result = self.get_subject_api_id_from_cache(subject)
         if not cached_result is None:
-            return cached_result
+            returnValue(cached_result)
         organization = self.organization
         offset = len(organization) + 1
         offset = offset * -1
