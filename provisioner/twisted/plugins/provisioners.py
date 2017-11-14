@@ -22,3 +22,6 @@ moodle_provisioner_factory = MoodleProvisionerFactory()
 
 from txgroupprovisioner.qualtrics_provisioner import QualtricsProvisionerFactory
 qualtrics_provisioner_factory = QualtricsProvisionerFactory()
+
+from txgroupprovisioner.duo_provisioner import DuoSecurityProvisionerFactory
+duo_provisioner_factory = DuoSecurityProvisionerFactory()
