@@ -243,7 +243,7 @@ class DuoSecurityProvisioner(RESTProvisioner):
         log = self.log
         http_client = self.http_client
         prefix = self.url_prefix
-        url = "{0}/users/{1}".format(prefix, upn)
+        url = "{}/users".format(prefix)
         headers = {
             'Accept': ['application/json'],
         }
@@ -384,6 +384,7 @@ class DuoSecurityProvisioner(RESTProvisioner):
             api_id = entry['group_id']
             local_id = entry['name']
             groups.append((local_id, api_id))
+        log.debug("Returning groups: {groups}", groups=groups)
         returnValue(groups)
 
     @inlineCallbacks
