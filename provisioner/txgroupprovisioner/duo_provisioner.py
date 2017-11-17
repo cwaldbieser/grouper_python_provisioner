@@ -158,6 +158,8 @@ class DuoSecurityProvisioner(RESTProvisioner):
         params = dict([(k, v[0]) for k, v in params.items()])
         other_params = http_options.setdefault("params", {})
         params.update(other_params)
+        data = http_options.get('data', {})
+        params.update(data)
         auth_headers = sign(method, host, path, params, client_secret, client_id)
         headers.update(auth_headers)
         returnValue((method, url, http_options))
@@ -308,14 +310,31 @@ class DuoSecurityProvisioner(RESTProvisioner):
         headers = {
             'Accept': ['application/json'],
         }
-        params = {
+        data = {
             'group_id': target_group_id
         }
+        resp = yield self.make_authenticated_api_call(
+            "GET",
+            url,
+            headers=headers)
+        resp_code = resp.code
+        parsed = yield resp.json()
+        if resp_code not in (200, ):
+            raise Exception("API call `api_add_subject_to_group()`, fetching memberships returned HTTP status {0}".format(resp_code))
+        groups = parsed['response']
+        for ginfo in groups:
+            gid = ginfo['group_id']
+            if gid == target_group_id:
+                log.debug(
+                    "Subject ID '{subject_id}' is already a member of group ID '{group_id}'.",
+                    subject_id=subject_id,
+                    group_id=target_group_id)
+                returnValue(None)
         resp = yield self.make_authenticated_api_call(
             "POST",
             url,
             headers=headers,
-            params=params)
+            data=data)
         resp_code = resp.code
         parsed = yield resp.json()
         if resp_code not in (200, ):
