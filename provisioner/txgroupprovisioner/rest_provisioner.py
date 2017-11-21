@@ -170,6 +170,21 @@ class RESTProvisioner(object):
         """
         Make API call to obtain valid auth token.
         Should set `self.auth_token`.
+        Logic in the REST provisioner will attempt to determine if an
+        authirization token has expired and needs to be renewed.  This
+        method will be called when that happens.
+
+        .. note::
+
+            Some APIs don't require a separate step for obtaining an authorization
+            token.  In that case, just set `self.auth_token` to True.  The actual
+            authorization of a HTTP request occurs in `authorize_api_call()`.
+            In that method, you may use `self.auth_token` or not.
+
+            E.g. If a request uses a simple shared secret for authorization, or
+            a JSON web token (JWT) which is based on time and a shared secret, then
+            `self.auth_token` would not be relevant to authorization.  Instead,
+            `self.client_secret` would likely be used directly.
         """
         if False:
             yield None
@@ -233,7 +248,7 @@ class RESTProvisioner(object):
     @inlineCallbacks
     def get_all_api_ids_and_match_values(self):
         """
-        Load all the remote subject IDs and match values from the 
+        Load all the remote API IDs and match values from the 
         user accounts that exist on the remote sevice.
         Returns an iterable of (api_id, match_value).
         """

@@ -25,3 +25,6 @@ qualtrics_provisioner_factory = QualtricsProvisionerFactory()
 
 from txgroupprovisioner.duo_provisioner import DuoSecurityProvisionerFactory
 duo_provisioner_factory = DuoSecurityProvisionerFactory()
+
+from txgroupprovisioner.zoom_provisioner import ZoomProvisionerFactory
+zoom_provisioner_factory = ZoomProvisionerFactory()
