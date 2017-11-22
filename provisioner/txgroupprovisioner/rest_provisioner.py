@@ -293,6 +293,7 @@ class RESTProvisioner(object):
     def api_get_remote_account(self, api_id):
         """
         Get the remote account information using its API ID.
+        If the remote account cannot be found, return None.
         """
         if False:
             yield None

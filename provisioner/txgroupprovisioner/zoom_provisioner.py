@@ -227,6 +227,7 @@ class ZoomProvisioner(RESTProvisioner):
     def api_get_remote_account(self, api_id):
         """
         Get the remote account information using its API ID.
+        If the remote account cannot be found, return None.
         """
         log = self.log
         func_name = 'api_get_remote_account()'
@@ -246,11 +247,13 @@ class ZoomProvisioner(RESTProvisioner):
             headers=headers)
         resp_code = resp.code
         remote_account = yield resp.json()
-        if resp_code != 200:
+        if not resp_code in (200, 404):
             raise Exception(
                 "{}: API call to fetch remote subject returned HTTP status {}".format(
                     func_name,
                     resp_code))
+        if resp_code == 404:
+            remote_account = None
         returnValue(remote_account)
 
     @inlineCallbacks
@@ -275,7 +278,10 @@ class ZoomProvisioner(RESTProvisioner):
         # interchangably with it in API calls.  Therefore, it is entirely reasonable to
         # use the match value to obtain the API ID directly *for this specific provisioner.*
         account = yield self.api_get_remote_account(match_value)
-        api_id = account.get("id", None)
+        if not account is None:
+            api_id = account.get("id", None)
+        else:
+            api_id = None
         returnValue(api_id)
 
     @inlineCallbacks
