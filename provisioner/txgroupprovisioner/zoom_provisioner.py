@@ -160,6 +160,20 @@ class ZoomProvisioner(RESTProvisioner):
         """
         log = self.log
         log.debug("Attempting to fetch local IDs from all remote user accounts ...")
+        ids = []
+        for status in ('active', 'inactive', 'pending'):
+            partial_ids = yield self.get_all_api_ids_and_match_values__(status=status)
+            ids.extend(partial_ids)
+        returnValue(ids)
+
+    @inlineCallbacks
+    def get_all_api_ids_and_match_values__(self, status='active'):
+        """
+        Load all the remote API IDs and match values from the 
+        user accounts that exist on the remote sevice and have status `status`.
+        Note: If a match value cannot be constructed for a remote
+        account, it will not be included in the output of this function.
+        """
         http_client = self.http_client
         prefix = self.url_prefix
         user_list_page_size = self.user_list_page_size
@@ -168,7 +182,8 @@ class ZoomProvisioner(RESTProvisioner):
             'Accept': ['application/json'],
         }
         params = {
-            'page_size': user_list_page_size
+            'page_size': user_list_page_size,
+            'status': status
         }
         identifiers = []
         for n in range(self.max_page_loops):
@@ -218,7 +233,7 @@ class ZoomProvisioner(RESTProvisioner):
         log.debug("Attempting to fetch remote account ...")
         http_client = self.http_client
         prefix = self.url_prefix
-        url = "{0}/users/{1}".format(prefix, api_id)
+        url = "{}/users/{}".format(prefix, api_id)
         headers = {
             'Accept': ['application/json'],
         }
@@ -229,7 +244,10 @@ class ZoomProvisioner(RESTProvisioner):
             "GET",
             url,
             headers=headers)
+        resp_code = resp.code
         remote_account = yield resp.json()
+        if resp_code != 200:
+            raise Exception("API call to fetch remote subject returned HTTP status {0}".format(resp_code))
         returnValue(remote_account)
 
     @inlineCallbacks
@@ -241,13 +259,13 @@ class ZoomProvisioner(RESTProvisioner):
         log = self.log
         http_client = self.http_client
         prefix = self.url_prefix
-        url = "{0}/users/{1}".format(prefix, api_id)
+        url = "{}/users/{}/status".format(prefix, api_id)
         headers = {
             'Accept': ['application/json'],
             'Content-Type': ['application/json'],
         }
         props = {
-            'status': 'disabled',
+            'status': 'deactivate',
         }
         serialized = json.dumps(props)
         body = StringProducer(serialized.encode('utf-8'))
@@ -264,7 +282,7 @@ class ZoomProvisioner(RESTProvisioner):
             content = yield resp.content()
         except Exception as ex:
             pass
-        if resp_code != 200:
+        if resp_code != 204:
             raise Exception("API call to deprovision subject returned HTTP status {0}".format(resp_code))
         returnValue(None)
 
@@ -275,29 +293,14 @@ class ZoomProvisioner(RESTProvisioner):
         Return None if the account does not exist on the remote end.
         """
         log = self.log
-        cached_result = self.get_subject_api_id_from_cache(subject)
-        if not cached_result is None:
-            returnValue(cached_result)
-        organization = self.organization
-        offset = len(organization) + 1
-        offset = offset * -1
-        computed_match_value = self.get_match_value_from_local_subject(subject, attributes)
-        results = yield self.get_all_api_ids_and_match_values()
-        log.debug("computed_match_value={computed_match_value}", computed_match_value=computed_match_value)
-        log.debug("len(results) == {size}", size=len(results))
-        account_map = {}
-        for api_id, match_value in results:
-            if match_value.lower().endswith("#{}".format(organization)):
-                subject = match_value[:offset]
-                account_map[subject] = api_id
-        self.fill_account_cache(account_map)
-        del account_map
-        for api_id, match_value in results:
-            if computed_match_value == match_value:
-                log.debug("Match value found.")
-                returnValue(api_id)
-        log.debug("No match found.")
-        returnValue(None)
+        match_value = self.get_match_value_from_local_subject(subject, attributes)
+        account = yield self.api_get_remote_account(self, match_value)
+        api_id = account.get("id", None)
+        returnValue(api_id)
+
+    @inlineCallbacks
+    def activate_account(self, api_id):
+        pass
 
     @inlineCallbacks
     def api_update_subject(self, subject, api_id, attributes):
@@ -306,23 +309,20 @@ class ZoomProvisioner(RESTProvisioner):
         Returns the HTTP response.
         """
         log = self.log
+        yield self.activate_account(api_id)
         prefix = self.url_prefix
-        url = "{0}/users/{1}".format(prefix, api_id)
+        url = "{}/users/{}".format(prefix, api_id)
         headers = {
             'Accept': ['application/json'],
             'Content-Type': ['application/json'],
         }
         organization = self.organization
-        username = "{}#{}".format(subject.lower(), organization.lower())
         surname = attributes.get("sn", [""])[0]
         givenname = attributes.get("givenName", [""])[0]
-        email = attributes.get("mail", [""])[0]
         props = {
-            'firstName': givenname,
-            'lastName': surname,
-            'email': email,
-            'username': username,
-            'status': 'active',
+            'first_name': givenname,
+            'last_name': surname,
+            'type': self.new_user_type,
         }
         serialized = json.dumps(props)
         body = StringProducer(serialized.encode('utf-8'))
