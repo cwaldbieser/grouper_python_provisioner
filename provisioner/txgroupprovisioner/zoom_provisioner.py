@@ -272,7 +272,7 @@ class ZoomProvisioner(RESTProvisioner):
         # API, the email address, which also happens to be the match value, can be used
         # interchangably with it in API calls.  Therefore, it is entirely reasonable to
         # use the match value to obtain the API ID directly *for this specific provisioner.*
-        account = yield self.api_get_remote_account(self, match_value)
+        account = yield self.api_get_remote_account(match_value)
         api_id = account.get("id", None)
         returnValue(api_id)
 
