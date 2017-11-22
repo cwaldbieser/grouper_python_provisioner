@@ -346,14 +346,13 @@ class ZoomProvisioner(RESTProvisioner):
         assert not attributes is None, "api_update_subject(): `attributes` is None!"
         # If you are updating a subject, it must be active (i.e. provisioned).
         # Therefor, it's state in Zoom must be set to active.
-        yield self.activate_account(api_id)
+        yield self.api_activate_account_(api_id)
         prefix = self.url_prefix
         url = "{}/users/{}".format(prefix, api_id)
         headers = {
             'Accept': ['application/json'],
             'Content-Type': ['application/json'],
         }
-        organization = self.organization
         surname = attributes.get("sn", [""])[0]
         givenname = attributes.get("givenName", [""])[0]
         props = {

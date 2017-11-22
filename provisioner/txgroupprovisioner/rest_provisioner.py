@@ -847,10 +847,10 @@ class RESTProvisioner(object):
         try:
             resp = yield self.api_update_subject(subject, api_id, attributes)
         except Exception as ex:
-            log.error(
-                "Error attempting to update subject '{subject}' identified by '{api_id}'.",
-                subject,
-                api_id)
+            #log.error(
+            #    "Error attempting to update subject '{subject}' identified by '{api_id}'.",
+            #    subject,
+            #    api_id)
             raise
         resp_code = resp.code
         log.debug("Response code: {code}", code=resp_code)
@@ -868,9 +868,9 @@ class RESTProvisioner(object):
         try:
             api_id = yield self.api_add_subject(subject, attributes)
         except Exception as ex:
-            log.error(
-                "Error attempting to add subject '{subject}'.",
-                subject=subject)
+            #log.error(
+            #    "Error attempting to add subject '{subject}'.",
+            #    subject=subject)
             raise
         if api_id is not None:    
             self.__account_cache[subject.lower()] = api_id
@@ -900,9 +900,9 @@ class RESTProvisioner(object):
         try:
             yield self.api_deprovision_subject(api_id)
         except Exception as ex:
-            log.error(
-                "Error attempting to de-provision subject identified by '{identifier}'.",
-                identifier=subject_identifier)
+            #log.error(
+            #    "Error attempting to de-provision subject identified by '{identifier}'.",
+            #    identifier=subject_identifier)
             raise
         account_cache = self.__account_cache
         if not subject is None:
