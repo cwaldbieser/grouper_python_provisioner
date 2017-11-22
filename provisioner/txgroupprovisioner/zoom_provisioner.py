@@ -174,10 +174,12 @@ class ZoomProvisioner(RESTProvisioner):
         Note: If a match value cannot be constructed for a remote
         account, it will not be included in the output of this function.
         """
+        log = self.log
+        func_name = 'get_all_api_ids_and_match_values__()'
         http_client = self.http_client
         prefix = self.url_prefix
         user_list_page_size = self.user_list_page_size
-        url = "{0}/users".format(prefix)
+        url = "{}/users".format(prefix)
         headers = {
             'Accept': ['application/json'],
         }
@@ -201,9 +203,11 @@ class ZoomProvisioner(RESTProvisioner):
             except Exception as ex:
                 log.error("Error fetching all remote user data.")
                 raise
-            if resp.code < 200 or resp.code > 299:
+            if resp.code != 200:
                 body = yield resp.text()
-                raise Exception("get_all_api_ids_and_match_values(): Received HTTP response code {}:\n{}".format(
+                raise Exception("{}: status={}; received HTTP response code {}:\n{}".format(
+                    func_name,
+                    status,
                     resp.code,
                     body))
             parsed = yield resp.json()
@@ -213,12 +217,13 @@ class ZoomProvisioner(RESTProvisioner):
             for user in users:
                 remote_id = self.get_api_id_from_remote_account(parsed)
                 match_value = self.get_match_value_from_remote_account(parsed)    
-                identifiers.append((rempte_id, match_value))
+                identifiers.append((remote_id, match_value))
             if received_page_number == received_page_count:
                 break
             if page_number != received_page_number:
                 log.warn(
-                    "Page number requested and received do not match: {page_number}, {received_page_number}", 
+                    "{func_name}: Page number requested and received do not match: {page_number}, {received_page_number}",
+                    func_name=func_name,
                     page_number=page_number,
                     received_page_number=received_page_number)
                 break
@@ -230,6 +235,7 @@ class ZoomProvisioner(RESTProvisioner):
         Get the remote account information using its API ID.
         """
         log = self.log
+        func_name = 'api_get_remote_account()'
         log.debug("Attempting to fetch remote account ...")
         http_client = self.http_client
         prefix = self.url_prefix
@@ -247,7 +253,10 @@ class ZoomProvisioner(RESTProvisioner):
         resp_code = resp.code
         remote_account = yield resp.json()
         if resp_code != 200:
-            raise Exception("API call to fetch remote subject returned HTTP status {0}".format(resp_code))
+            raise Exception(
+                "{}: API call to fetch remote subject returned HTTP status {}".format(
+                    func_name,
+                    resp_code))
         returnValue(remote_account)
 
     @inlineCallbacks
@@ -257,6 +266,38 @@ class ZoomProvisioner(RESTProvisioner):
         `api_id`.
         """
         log = self.log
+        yield self.api_set_account_status_('deactivate', api_id)
+
+    @inlineCallbacks
+    def api_get_account_id(self, subject, attributes):
+        """
+        Fetch the remote ID for a subject.
+        Return None if the account does not exist on the remote end.
+        """
+        log = self.log
+        match_value = self.get_match_value_from_local_subject(subject, attributes)
+        # Note: While `api_get_remote_account() takes an API ID as a parameter, for the Zoom
+        # API, the email address, which also happens to be the match value, can be used
+        # interchangably with it in API calls.  Therefore, it is entirely reasonable to
+        # use the match value to obtain the API ID directly *for this specific provisioner.*
+        account = yield self.api_get_remote_account(self, match_value)
+        api_id = account.get("id", None)
+        returnValue(api_id)
+
+    @inlineCallbacks
+    def api_activate_account_(self, api_id):
+        """
+        Call the Zoom API to set an account's status to active.
+        """
+        yield self.api_set_account_status_('activate', api_id)
+
+    @inlineCallbacks
+    def api_set_account_status_(self, status, api_id):
+        """
+        Call the Zoom API to set an account status.
+        """
+        log = self.log
+        func_name = 'api_set_account_status_()'
         http_client = self.http_client
         prefix = self.url_prefix
         url = "{}/users/{}/status".format(prefix, api_id)
@@ -265,7 +306,7 @@ class ZoomProvisioner(RESTProvisioner):
             'Content-Type': ['application/json'],
         }
         props = {
-            'status': 'deactivate',
+            'status': status,
         }
         serialized = json.dumps(props)
         body = StringProducer(serialized.encode('utf-8'))
@@ -283,24 +324,12 @@ class ZoomProvisioner(RESTProvisioner):
         except Exception as ex:
             pass
         if resp_code != 204:
-            raise Exception("API call to deprovision subject returned HTTP status {0}".format(resp_code))
+            raise Exception(
+                "{}: API call to set account status to '{}' returned HTTP status {}".format(
+                    func_name,
+                    status,
+                    resp_code))
         returnValue(None)
-
-    @inlineCallbacks
-    def api_get_account_id(self, subject, attributes):
-        """
-        Fetch the remote ID for a subject.
-        Return None if the account does not exist on the remote end.
-        """
-        log = self.log
-        match_value = self.get_match_value_from_local_subject(subject, attributes)
-        account = yield self.api_get_remote_account(self, match_value)
-        api_id = account.get("id", None)
-        returnValue(api_id)
-
-    @inlineCallbacks
-    def activate_account(self, api_id):
-        pass
 
     @inlineCallbacks
     def api_update_subject(self, subject, api_id, attributes):
@@ -309,6 +338,8 @@ class ZoomProvisioner(RESTProvisioner):
         Returns the HTTP response.
         """
         log = self.log
+        # If you are updating a subject, it must be active (i.e. provisioned).
+        # Therefor, it's state in Zoom must be set to active.
         yield self.activate_account(api_id)
         prefix = self.url_prefix
         url = "{}/users/{}".format(prefix, api_id)
@@ -330,7 +361,7 @@ class ZoomProvisioner(RESTProvisioner):
         log.debug("headers: {headers}", headers=headers)
         log.debug("body: {body}", body=serialized)
         resp = yield self.make_authenticated_api_call(
-            'PUT',  
+            'PATCH',  
             url, 
             data=body, 
             headers=headers)
@@ -346,26 +377,26 @@ class ZoomProvisioner(RESTProvisioner):
         a lookup on future use.
         """
         log = self.log
-        log.debug("Entered: api_add_subject().")
+        func_name = 'api_add_subject()'
+        log.debug("Entered: {func_name}", func_name=func_name)
         prefix = self.url_prefix
-        url = "{0}/users".format(prefix)
+        url = "{}/users".format(prefix)
         headers = {
             'Accept': ['application/json'],
             'Content-Type': ['application/json'],
         }
-        organization = self.organization
-        username = "{}#{}".format(subject.lower(), organization.lower())
         surname = attributes.get("sn", [""])[0]
         givenname = attributes.get("givenName", [""])[0]
         email = attributes.get("mail", [""])[0]
-        props = {
-            'username': username,
-            'password': generate_password(),
-            'firstName': givenname,
-            'lastName': surname,
-            'userType': self.new_user_type,
+        user_info = {
             'email': email,
-            'language': self.language,
+            'type': self.new_user_type,
+            'first_name': givenname,
+            'last_name': surname,
+        }
+        props = {
+            'action': 'ssoCreate',
+            'user_info': user_info,
         }
         serialized = json.dumps(props)
         body = StringProducer(serialized.encode('utf-8'))
@@ -378,25 +409,21 @@ class ZoomProvisioner(RESTProvisioner):
             data=body, 
             headers=headers)
         resp_code = resp.code
-        log.debug("Add-subject API response code: {code}", code=resp_code)
-        if resp_code != 200:
+        log.debug(
+            "{func_name}: Add-subject API response code: {code}", 
+            func_name=func_name,
+            code=resp_code)
+        if resp_code != 201:
             content = yield resp.content()
             log.error(
-                "API response {code}: {content}", 
+                "{func_name}: API response {code}: {content}",
+                func_name=func_name,
                 code=resp_code,
                 content=content)
-            raise Exception("API returned status {0}".format(resp_code))
-        else:
-            parsed = yield resp.json()
-            if not "result" in parsed:
-                raise Exception("Error in `api_add_subject()`: {}".format(
-                    json.dumps(parsed))) 
-            result = parsed['result']
-            if not "id" in result:
-                raise Exception("Error in `api_add_subject()`: {}".format(
-                    json.dumps(parsed))) 
-            api_id = result["id"]
-            returnValue(api_id)
+            raise Exception("{}: API returned status {}".format(func_name, resp_code))
+        parsed = yield resp.json()
+        api_id = self.get_match_value_from_remote_account(parsed)
+        returnValue(api_id)
 
     @inlineCallbacks
     def api_add_subject_to_group(self, subject_id, target_group_id):
@@ -406,10 +433,41 @@ class ZoomProvisioner(RESTProvisioner):
         Should raise on error on failure.
         """
         log = self.log
-        log.debug("Entered: api_add_subject_to_group().")
-        if False:
-            yield "Can't wait for async/await!"
-        raise NotImplementedError()
+        func_name = 'api_add_subject_to_group()'
+        log.debug("Entered: {func_name}", func_name=func_name)
+        prefix = self.url_prefix
+        url = "{}/groups/{}/members".format(prefix, target_group_id)
+        headers = {
+            'Accept': ['application/json'],
+            'Content-Type': ['application/json'],
+        }
+        props = {
+            "members": [
+                {
+                    "id": subject_id,
+                }
+            ],    
+        }
+        serialized = json.dumps(props)
+        body = StringProducer(serialized.encode('utf-8'))
+        log.debug("url: {url}", url=url)
+        log.debug("headers: {headers}", headers=headers)
+        log.debug("body: {body}", body=serialized)
+        resp = yield self.make_authenticated_api_call(
+            'POST',  
+            url, 
+            data=body, 
+            headers=headers)
+        resp_code = resp.code
+        if resp_code != 201:
+            content = yield resp.content()
+            log.error(
+                "{func_name}: API response {code}: {content}",
+                func_name=func_name,
+                code=resp_code,
+                content=content)
+            raise Exception("{}: API returned status {0}".format(func_name, resp_code))
+        parsed = yield resp.json()
 
     @inlineCallbacks
     def api_remove_subject_from_group(self, subject_id, target_group_id):
@@ -419,10 +477,30 @@ class ZoomProvisioner(RESTProvisioner):
         Should raise on error on failure.
         """
         log = self.log
-        log.debug("Entered: api_add_subject_to_group().")
-        if False:
-            yield "Can't wait for async/await!"
-        raise NotImplementedError()
+        func_name = 'api_remove_subject_from_group()'
+        log.debug("Entered: {func_name}", func_name=func_name)
+        prefix = self.url_prefix
+        url = "{}/groups/{}/members/{}".format(prefix, target_group_id, subject_id)
+        headers = {
+            'Accept': ['application/json'],
+            'Content-Type': ['application/json'],
+        }
+        log.debug("url: {url}", url=url)
+        log.debug("headers: {headers}", headers=headers)
+        resp = yield self.make_authenticated_api_call(
+            'DELETE',  
+            url, 
+            headers=headers)
+        resp_code = resp.code
+        if resp_code != 204:
+            content = yield resp.content()
+            log.error(
+                "{func_name}: API response {code}: {content}",
+                func_name=func_name,
+                code=resp_code,
+                content=content)
+            raise Exception("{}: API returned status {}".format(func_name, resp_code))
+        parsed = yield resp.json()
 
     @inlineCallbacks
     def api_get_all_target_groups(self):
@@ -431,10 +509,38 @@ class ZoomProvisioner(RESTProvisioner):
         Must return an iterable that yields tuples of
         (local_group_id, remote_group_id).
         """
-        if False:
-            yield "Can't wait for async/await!"
-        log = self.log  
-        raise NotImplementedError()
+        log = self.log
+        func_name = 'api_get_all_target_groups()'
+        log.debug("Entered: {func_name}.", func_name=func_name)
+        prefix = self.url_prefix
+        url = "{}/groups".format(prefix)
+        headers = {
+            'Accept': ['application/json'],
+            'Content-Type': ['application/json'],
+        }
+        log.debug("url: {url}", url=url)
+        log.debug("headers: {headers}", headers=headers)
+        resp = yield self.make_authenticated_api_call(
+            'GET',  
+            url, 
+            headers=headers)
+        resp_code = resp.code
+        if resp_code != 200:
+            content = yield resp.content()
+            log.error(
+                "{func_name}: API response {code}: {content}",
+                func_name=func_name,
+                code=resp_code,
+                content=content)
+            raise Exception("{}: API returned status {}".format(func_name, resp_code))
+        parsed = yield resp.json()
+        groups = parsed["groups"]
+        group_id_list = []
+        for entry in groups:
+            api_id = entry["id"]
+            local_id = entry["name"]
+            group_id_list.append((local_id, api_id))
+        returnValue(group_id_list)
 
     @inlineCallbacks
     def get_subjects_for_target_group(self, target_group_id):
@@ -442,13 +548,61 @@ class ZoomProvisioner(RESTProvisioner):
         Retireve a list of remote subject IDs that belong to a target_group identified
         by remote target_group_id.
         """
-        if False:
-            yield "Can't wait for async/await!"
-        log = self.log  
-        raise NotImplementedError()
+        log = self.log
+        func_name = 'get_subjects_for_target_group()'
+        http_client = self.http_client
+        prefix = self.url_prefix
+        user_list_page_size = self.user_list_page_size
+        url = "{}/groups/{}/members".format(prefix, target_group_id)
+        headers = {
+            'Accept': ['application/json'],
+        }
+        params = {
+            'page_size': user_list_page_size,
+            'status': status
+        }
+        identifiers = []
+        for n in range(self.max_page_loops):
+            page_number = n + 1
+            params['page_number'] = page_number
+            log.debug("URL (GET): {url}", url=url)
+            log.debug("headers: {headers}", headers=headers)
+            log.debug("headers: {params}", params=params)
+            try:
+                resp = yield self.make_authenticated_api_call(
+                    "GET",
+                    url,
+                    headers=headers,
+                    params=params)
+            except Exception as ex:
+                log.error("Error fetching all remote user data.")
+                raise
+            if resp.code != 200:
+                body = yield resp.text()
+                raise Exception("{}: Received HTTP response code {}:\n{}".format(
+                    func_name,
+                    resp.code,
+                    body))
+            parsed = yield resp.json()
+            received_page_number = parsed["page_number"]
+            received_page_count = parsed["page_count"]
+            users = parsed['members']
+            for user in users:
+                remote_id = self.get_api_id_from_remote_account(parsed)
+                identifiers.append(remote_id)
+            if received_page_number == received_page_count:
+                break
+            if page_number != received_page_number:
+                log.warn(
+                    "{func_name}: Page number requested and received do not match: {page_number}, {received_page_number}",
+                    func_name=func_name,
+                    page_number=page_number,
+                    received_page_number=received_page_number)
+                break
+        returnValue(identifiers)
 
 
-class QualtricsProvisionerFactory(RESTProvisionerFactory):
+class ZoomProvisionerFactory(RESTProvisionerFactory):
     tag = "zoom_provisioner"
     opt_help = "Zoom REST API Provisioner"
     opt_usage = "This plugin does not support any options."
