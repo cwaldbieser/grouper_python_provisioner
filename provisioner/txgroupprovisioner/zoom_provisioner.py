@@ -211,8 +211,8 @@ class ZoomProvisioner(RESTProvisioner):
             received_page_count = parsed["page_count"]
             users = parsed['users']
             for user in users:
-                remote_id = self.get_api_id_from_remote_account(parsed)
-                match_value = self.get_match_value_from_remote_account(parsed)    
+                remote_id = self.get_api_id_from_remote_account(user)
+                match_value = self.get_match_value_from_remote_account(user)    
                 identifiers.append((remote_id, match_value))
             if received_page_number == received_page_count:
                 break
