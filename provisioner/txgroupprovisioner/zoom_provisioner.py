@@ -48,6 +48,7 @@ class ZoomProvisioner(RESTProvisioner):
       should not be managed by the provisioner (e.g. a back door admin account).
       These accounts are identified by their match_values.
     """
+    client_id = None
     new_user_type = 2 # Pro
     jwt_expiration_seconds = 30
     user_list_page_size = 100
@@ -92,6 +93,10 @@ class ZoomProvisioner(RESTProvisioner):
         """
         log = self.log
         config = self.config
+        client_id = config.get("client_id", None)
+        if client_id is None:
+            raise OptionMissingError("Option `client_id` is required.")
+        self.client_id = client_id
         new_user_type = int(config.get("new_user_type", "2"))
         self.new_user_type = new_user_type
         jwt_expiration_seconds = int(config.get("jwt_expiration_seconds", "30"))

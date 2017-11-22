@@ -22,6 +22,7 @@ pyasn1==0.3.4
 pyasn1-modules==0.1.4
 pycparser==2.18
 pycrypto==2.6.1
+PyJWT==1.5.3
 pylru==1.0.9
 pyOpenSSL==17.3.0
 pyparsing==2.1.1
