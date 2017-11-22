@@ -459,8 +459,7 @@ class RESTProvisioner(object):
             if action in single_subject_actions:
                 subject = doc['subject'].lower()
                 attributes = None
-                if action  != constants.ACTION_DELETE:
-                    attributes = doc['attributes']
+                attributes = doc['attributes']
                 return ParsedSubjectMessage(action, group, subject, attributes)
             elif action == constants.ACTION_MEMBERSHIP_SYNC:
                 subjects = doc['subjects']

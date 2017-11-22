@@ -52,6 +52,7 @@ class ZoomProvisioner(RESTProvisioner):
         account.
         """
         log = self.log
+        assert not remote_account is None, "`remote_account` is None!"
         match_value = remote_account.get("email", None)
         if match_value is not None:
             match_value = match_value.lower()
@@ -62,6 +63,7 @@ class ZoomProvisioner(RESTProvisioner):
         Given a local subject and attributes, compute the value that
         will be used to match the remote account to the local subject.
         """
+        assert not attributes is None, "get_match_value_from_local_subject(): `attributes` is None!"
         mail = attributes.get("mail", [None])[0]
         if not mail is None:
             mail = mail.lower()
@@ -73,6 +75,7 @@ class ZoomProvisioner(RESTProvisioner):
         value that is used as an account identifier in API
         calls that reference the account.
         """
+        assert not remote_account is None, "`remote_account` is None!"
         return remote_account.get("id", None)
 
     def parse_config(self, scp):
@@ -271,6 +274,8 @@ class ZoomProvisioner(RESTProvisioner):
         Return None if the account does not exist on the remote end.
         """
         log = self.log
+        func_name = 'api_get_account_id'
+        log.debug("Entered {func_name}", func_name=func_name)
         match_value = self.get_match_value_from_local_subject(subject, attributes)
         # Note: While `api_get_remote_account() takes an API ID as a parameter, for the Zoom
         # API, the email address, which also happens to be the match value, can be used
@@ -305,7 +310,7 @@ class ZoomProvisioner(RESTProvisioner):
             'Content-Type': ['application/json'],
         }
         props = {
-            'status': status,
+            'action': status,
         }
         serialized = json.dumps(props)
         body = StringProducer(serialized.encode('utf-8'))
@@ -324,10 +329,11 @@ class ZoomProvisioner(RESTProvisioner):
             pass
         if resp_code != 204:
             raise Exception(
-                "{}: API call to set account status to '{}' returned HTTP status {}".format(
+                "{}: API call to set account status to '{}' returned HTTP status {}\n{}".format(
                     func_name,
                     status,
-                    resp_code))
+                    resp_code,
+                    content))
         returnValue(None)
 
     @inlineCallbacks
@@ -337,6 +343,7 @@ class ZoomProvisioner(RESTProvisioner):
         Returns the HTTP response.
         """
         log = self.log
+        assert not attributes is None, "api_update_subject(): `attributes` is None!"
         # If you are updating a subject, it must be active (i.e. provisioned).
         # Therefor, it's state in Zoom must be set to active.
         yield self.activate_account(api_id)
@@ -376,6 +383,7 @@ class ZoomProvisioner(RESTProvisioner):
         a lookup on future use.
         """
         log = self.log
+        assert not attributes is None, "api_add_subject(): `attributes` is None!"
         func_name = 'api_add_subject()'
         log.debug("Entered: {func_name}", func_name=func_name)
         prefix = self.url_prefix
@@ -414,11 +422,11 @@ class ZoomProvisioner(RESTProvisioner):
             code=resp_code)
         if resp_code != 201:
             content = yield resp.content()
-            log.error(
-                "{func_name}: API response {code}: {content}",
-                func_name=func_name,
-                code=resp_code,
-                content=content)
+            #log.error(
+            #    "{func_name}: API response {code}: {content}",
+            #    func_name=func_name,
+            #    code=resp_code,
+            #    content=content)
             raise Exception("{}: API returned status {}".format(func_name, resp_code))
         parsed = yield resp.json()
         api_id = self.get_match_value_from_remote_account(parsed)
@@ -460,12 +468,12 @@ class ZoomProvisioner(RESTProvisioner):
         resp_code = resp.code
         if resp_code != 201:
             content = yield resp.content()
-            log.error(
-                "{func_name}: API response {code}: {content}",
-                func_name=func_name,
-                code=resp_code,
-                content=content)
-            raise Exception("{}: API returned status {0}".format(func_name, resp_code))
+            #log.error(
+            #    "{func_name}: API response {code}: {content}",
+            #    func_name=func_name,
+            #    code=resp_code,
+            #    content=content)
+            raise Exception("{}: API returned status {}".format(func_name, resp_code))
         parsed = yield resp.json()
 
     @inlineCallbacks
@@ -493,11 +501,11 @@ class ZoomProvisioner(RESTProvisioner):
         resp_code = resp.code
         if resp_code != 204:
             content = yield resp.content()
-            log.error(
-                "{func_name}: API response {code}: {content}",
-                func_name=func_name,
-                code=resp_code,
-                content=content)
+            #log.error(
+            #    "{func_name}: API response {code}: {content}",
+            #    func_name=func_name,
+            #    code=resp_code,
+            #    content=content)
             raise Exception("{}: API returned status {}".format(func_name, resp_code))
         parsed = yield resp.json()
 
@@ -526,11 +534,11 @@ class ZoomProvisioner(RESTProvisioner):
         resp_code = resp.code
         if resp_code != 200:
             content = yield resp.content()
-            log.error(
-                "{func_name}: API response {code}: {content}",
-                func_name=func_name,
-                code=resp_code,
-                content=content)
+            #log.error(
+            #    "{func_name}: API response {code}: {content}",
+            #    func_name=func_name,
+            #    code=resp_code,
+            #    content=content)
             raise Exception("{}: API returned status {}".format(func_name, resp_code))
         parsed = yield resp.json()
         groups = parsed["groups"]
