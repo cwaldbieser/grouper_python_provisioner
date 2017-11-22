@@ -19,19 +19,6 @@ from twisted.internet.defer import (
 )
 import jwt
 
-def generate_password():
-    """
-    Generate a random password.
-    """
-    caps = [random.choice(string.ascii_uppercase) for n in range(2)]
-    lowers = [random.choice(string.ascii_lowercase) for n in range(2)]
-    punct = [random.choice(string.punctuation)]
-    digit = [random.choice(string.digits)]
-    others = [random.choice(string.ascii_letters + string.punctuation + string.digits) for n in range(9)]
-    concat = list(itertools.chain(caps, lowers, punct, digit, others))
-    random.shuffle(concat)
-    return ''.join(concat)
-
 
 class ZoomProvisioner(RESTProvisioner):
     """
@@ -74,7 +61,7 @@ class ZoomProvisioner(RESTProvisioner):
         Given a local subject and attributes, compute the value that
         will be used to match the remote account to the local subject.
         """
-        mail = attributes.get("mail", None)
+        mail = attributes.get("mail", [None])[0]
         if not mail is None:
             mail = mail.lower()
         return mail
