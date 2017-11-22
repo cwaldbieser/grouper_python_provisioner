@@ -52,7 +52,6 @@ class ZoomProvisioner(RESTProvisioner):
         account.
         """
         log = self.log
-        organization = self.organization
         match_value = remote_account.get("email", None)
         if match_value is not None:
             match_value = match_value.lower()
