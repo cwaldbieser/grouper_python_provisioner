@@ -472,7 +472,10 @@ class ZoomProvisioner(RESTProvisioner):
             #    func_name=func_name,
             #    code=resp_code,
             #    content=content)
-            raise Exception("{}: API returned status {}".format(func_name, resp_code))
+            raise Exception("{}: API returned status {}\n{}".format(
+                func_name, 
+                resp_code, 
+                content))
         parsed = yield resp.json()
 
     @inlineCallbacks
@@ -506,7 +509,7 @@ class ZoomProvisioner(RESTProvisioner):
             #    code=resp_code,
             #    content=content)
             raise Exception("{}: API returned status {}".format(func_name, resp_code))
-        parsed = yield resp.json()
+        parsed = yield resp.content()
 
     @inlineCallbacks
     def api_get_all_target_groups(self):
@@ -565,7 +568,6 @@ class ZoomProvisioner(RESTProvisioner):
         }
         params = {
             'page_size': user_list_page_size,
-            'status': status
         }
         identifiers = []
         for n in range(self.max_page_loops):
@@ -594,7 +596,7 @@ class ZoomProvisioner(RESTProvisioner):
             received_page_count = parsed["page_count"]
             users = parsed['members']
             for user in users:
-                remote_id = self.get_api_id_from_remote_account(parsed)
+                remote_id = self.get_api_id_from_remote_account(user)
                 identifiers.append(remote_id)
             if received_page_number == received_page_count:
                 break

@@ -139,6 +139,7 @@ class RESTProvisioner(object):
     account_sync_rate_limit_ms = 0
     member_sync_rate_limit_ms = 0
     provision_strategy = "query-first"
+    group_sync_strategy = "add-members-first"
 
     def get_match_value_from_remote_account(self, remote_account):
         """
@@ -344,6 +345,9 @@ class RESTProvisioner(object):
                 self.account_sync_rate_limit_ms = int(config.get("account_sync_rate_limit_ms", 0))
                 self.member_sync_rate_limit_ms = int(config.get("member_sync_rate_limit_ms", 0))
                 self.provision_strategy = config.get("provision_strategy", "query-first").lower()
+                self.group_sync_strategy = config.get("group_sync_strategy", "add-members-first").lower()
+                if not self.group_sync_strategy in ('query-first', 'add-members-first'):
+                    raise Exception("Unknown group_sync_strategy: {}".format(self.group_sync_strategy))
             except KeyError as ex:
                 raise OptionMissingError(
                     "A require option was missing: '{0}:{1}'.".format(
@@ -662,8 +666,13 @@ class RESTProvisioner(object):
         log = self.log
         assert (subject is not None), "Must provide `subject`!"
         assert (target_group is not None) or (target_group_id is not None), "Must provide `target_group` or `target_group_id`!"
-        if self.is_subject_unmanaged(subject, attributes):
-            returnValue(None)
+        if not subject is None:
+            if self.is_subject_unmanaged(subject, attributes):
+                returnValue(None)
+        else:
+            is_unmanaged = yield self.is_api_id_unmanaged(subject_id)
+            if is_unmanaged:
+                returnValue(None)
         if target_group_id is None:
             target_group_id = yield self.fetch_target_group_id(target_group)
             if target_group_id is None:
@@ -691,6 +700,13 @@ class RESTProvisioner(object):
         log = self.log
         assert (subject is not None) or (subject_id is not None), "Must provide `subject` or `subject_id`!"
         assert (target_group is not None) or (target_group_id is not None), "Must provide `target_group` or `target_group_id`!"
+        if not subject is None:
+            if self.is_subject_unmanaged(subject, attributes):
+                returnValue(None)
+        else:
+            is_unmanaged = yield self.is_api_id_unmanaged(subject_id)
+            if is_unmanaged:
+                returnValue(None)
         subject_identifier = subject or subject_id
         if target_group_id is None:
             target_group_id = yield self.fetch_target_group_id(target_group)
@@ -715,6 +731,7 @@ class RESTProvisioner(object):
         """
         log = self.log
         reactor = self.reactor
+        group_sync_strategy = self.group_sync_strategy
         rate_limit_ms = self.member_sync_rate_limit_ms
         if rate_limit_ms != 0:
             rate_limit_td = datetime.timedelta(milliseconds=rate_limit_ms)
@@ -728,6 +745,12 @@ class RESTProvisioner(object):
                 target_group=target_group)
             returnValue(None)
         subject_api_ids = []
+        if group_sync_strategy == 'query-first':
+            log.debug("Group sync strategy is 'query-first'.")
+            existing_member_ids = yield self.get_subjects_for_target_group(target_group_id)
+        else:
+            existing_member_ids = set([])
+        log.debug("`existing_member_ids`: {existing_ids}", existing_ids=existing_member_ids)
         subject_list = list(subjects)
         subject_list.sort()
         for subject in subjects:
@@ -747,6 +770,11 @@ class RESTProvisioner(object):
             count=len(subject_api_ids),
             target_group=target_group)
         for subject, subject_api_id in subject_api_ids:
+            if subject_api_id in existing_member_ids:
+                continue
+            is_unmanaged = yield self.is_api_id_unmanaged(subject_api_id)
+            if is_unmanaged:
+                continue
             subj_attribs = None
             if attributes is not None:
                 subj_attribs = attributes.get(subject, None)
