@@ -358,7 +358,6 @@ class ZoomProvisioner(RESTProvisioner):
         props = {
             'first_name': givenname,
             'last_name': surname,
-            'type': self.new_user_type,
         }
         serialized = json.dumps(props)
         body = StringProducer(serialized.encode('utf-8'))
