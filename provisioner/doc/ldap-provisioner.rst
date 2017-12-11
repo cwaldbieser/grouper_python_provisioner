@@ -26,9 +26,9 @@ The options for the LDAP provisioner are:
 * **passwd**: Password for the **bind_dn** option.
 * **empty_dn**: A DN used to populate a group if it would otherwise be empty.  This
   is useful for LDAP groups with the `groupOfNames` schema, as it is a schema
-violation to remove the `member` attribute entirely.  If all members would be removed
-from the group, the **empty_dn** value is used instead.  
-E.g. `cn=nobody,ou=nowhere,dc=example,dc=org`.
+  violation to remove the `member` attribute entirely.  If all members would be removed
+  from the group, the **empty_dn** value is used instead.  
+  E.g. `cn=nobody,ou=nowhere,dc=example,dc=org`.
 
 """""""""""""""""""""""
 Group Map Configuration
@@ -60,9 +60,11 @@ configuration (dictionary) consiting of the following keys:
 
 * **template**: (string) A Jinja2 template that will undergo substitutions with
   the following variables:
+
     * `group`: The base Grouper group name (no stem).
     * `stem`: The stem of the Grouper group.
     * `fqgroup`: The fully qualified Grouper group name (includes stem).
+
 * **create_group**: (boolean) Create the group in the DIT if it cannot be found 
   by searching.
 * **create_context**: (string) The parent DN under which the group should be 

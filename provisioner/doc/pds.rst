@@ -3,24 +3,24 @@
 Provisioner Delivery Service
 ============================
 
-The kiki provisioner is actually a :term:`PDS` or a 
-"provisioner-provisioner".  It accepts a provisioning message from a source,
-possibly looks up some attributes related to the subject, packages the results
-in a new message, and sends the new message to an exchange with a new routing
-key determined from the old message.
+The :term:`Provisioner Delivery Service` modifies messages it receives.
+It may look up attributes and group mapping for subjects.  It rewrites
+messages into a common format.  It then applies routing labels to messages
+and delivers then to an exchange. 
 
 To use this provisioner, set the *provisioner* option under the 
 *APPLICATION* section to "kiki".
 
 This provisioner supports the following options in the `PROVISIONER` section:
+
 * *attrib_resolver* (required) - The tag that identifies an attribute
   resolver that will fetch the attributes for a given subject.
 * *parser_map* (required) - A configuration file that maps received
   messages to a particular type of message parser (see below).
 
-""""""""""""""""""""""""""""
+----------------------------
 Provisioning Message Parsing
-""""""""""""""""""""""""""""
+----------------------------
 
 Because provisioning messages can come from different sources, their message
 formats may be wildly different.  The Kiki service determines how to parse
@@ -32,6 +32,10 @@ Parsers include:
 
 * PyChangeLoggerParser
 * SubjectAttributeUpdateParser
+
+Additional message parsers can be created by creating classes that
+implement the :py:class:`IMessageParser` and :py:class:`IMessageParserFactory`
+interfaces.
 
 Mapping is controlled via the *parser_map* option set in the 
 *PROVISIONER* section.  This option should point to a JSON file that
@@ -57,15 +61,17 @@ parser.  The stanzas are tried in order, and the first match is selected.
 If no stanzas match, the message will not be parsed, and the message will
 be re-queued.
 
-"""""""""""""
+-------------
 Group Mapping
-"""""""""""""
+-------------
 
-Some messages do not include group information.  For example, an entity change
-notification system may only indicate that the attributes of a subject have
-changed, and it is up to the provisioner delivery system to determine the
-groups to which the subject belongs.  This is important for routing to
-account provisioner targets (see Routing_ below).
+Some messages do not include group information.  For example, a source that
+produces events when an attribute changes on a subject may only indicate that
+non-membership attributes of a subject have changed, and it is up to the 
+provisioner delivery system to determine which provisioning targets need to be
+notified.  Because routing_ logic (see below) is intimately connected to the
+groups to which a subject belongs, the :term:`PDS` must be able to query the
+source system for these memberships.  
 
 The type of group mapper used is selected by setting the *group_mapper*
 option in the *PROVISIONER* section.
@@ -77,7 +83,8 @@ Null Group Mapper
 The null group mapper is selected with the value `null_group_mapper`.  It maps
 subjects to an empty set of groups.  Such messages are discarded by the
 provisioner delivery service.  In effect, it only allows the processing of
-messages that include group information.
+messages that include group information.  Messages that indicate other kinds of
+attribute changes on subjects would be discarded.
 
 ;;;;;;;;;;;;;;;;;;
 RDBMS Group Mapper
@@ -100,15 +107,29 @@ All other options will be passed directly to the database driver (e.g. `host`
 and `port` for a MySQL connection, and `database` for an sqlite3 connection,
 etc.).
 
-
 """""""
+Example
+"""""""
+
+.. code-block:: ini
+
+    [RDBMS Group Mapper]
+    driver = MySQLdb
+    query = SELECT A.GROUP_NAME FROM grouper_memberships_v A WHERE A.SUBJECT_ID = ?
+    host = mysqlhost.example.net
+    port = 3306
+    db = grouper
+    user = grouper_db_user
+    passwd = DB-PASSWORD-GOES-HERE
+
+
+-------
 Routing
-"""""""
+-------
 
-Routing is the process by which the provisioner delivery service decides which
-routing keys to apply to a message before delivering it to a target exchange.
-A particular router is specified with the *router* option in the 
-`PROVISIONER` section.
+Routing is the process by which the :term:`PDS` decides which routing keys to
+apply to a message before delivering it to a target exchange.  A particular
+router is specified with the *router* option in the `PROVISIONER` section.
 
 ;;;;;;;;;;;
 JSON Router
@@ -173,9 +194,58 @@ matched will be used as fields of the final routing key.
 For example, if 3 groups match 3 routes with route keys 'frobnitz', 'xyzzy',
 and 'wumpus', the final routing key will be 'frobnitz.xyzzy.wumpus'.
 
-"""""""""""""""""""
+"""""""
+Example
+"""""""
+
+.. code-block:: ini
+
+    [JSON Router]
+    json_file = /etc/grouper/provisioners/pds/router.json
+
+-------------------
 Attribute Resolvers
-"""""""""""""""""""
+-------------------
+
+;;;;;;;;;;;;;;;;;;;;;;;
+LDAP Attribute Resolver
+;;;;;;;;;;;;;;;;;;;;;;;
+
+The LDAP attribute resolver queries attributes for a subject from an LDAP
+service.  This resolver reads its configuration from the section
+`LDAP Attribute Resolver`.  The options are as follows:
+
+* *endpoint* (required) - A `Twisted endpoint`_ description for a server.
+* *base_dn* (required) - The base DN from which to search the LDAP :term:`DIT`.
+* *bind_dn* (required) - The DN used to authenticate to the LDAP service.
+* *bind_password* (required) - The password usedto authenticate to the LDAP
+  service.
+* *filter* (required) - The LDAP filter used to select the subject.  This
+  filter should be a template using the 
+  `Jinja2 <http://jinja.pocoo.org/docs/2.10/>`_ templating syntax.  The filter
+  **escape_filter_chars** is available within the template (see the example
+  below).
+* *start_tls* (required) - May be true ("1", "yes", "true", "on") or false 
+  ("0", "no", "false", "off").  If true, the attribute resolver will connect
+  to an unencrypted TCP port and later negotiate TLS as part of the LDAP
+  protocol *before* BINDing.  If false, the attribute resolver will not
+  initiate StartTLS.  In this case, it is *strongly* recommended that the 
+  endpoint (see above) be a TLS connection or some other protected endpoint.
+* *attributes* (required) - A space-separated list of attributes that will
+  be requested for a subject from the LDAP service.
+
+Example:
+
+.. code-block:: ini
+
+    [LDAP Attribute Resolver]
+    endpoint = tcp:ldap.example.edu:389
+    base_dn = dc=example,dc=net
+    bind_dn = cn=attribute-browser,dc=example,dc=net
+    bind_passwd = PASSWORD-GOES-HERE
+    filter = (uid={{ subject|escape_filter_chars }})
+    start_tls = true
+    attributes = uid givenName sn mail displayName
 
 ;;;;;;;;;;;;;;;;;;;;;;;;
 RDBMS Attribute Resolver
@@ -199,18 +269,46 @@ All other options will be passed directly to the database driver (e.g. `host`
 and `port` for a MySQL connection, and `database` for an sqlite3 connection,
 etc.).
 
-""""""""""""""""
+----------------
 Message Delivery
-""""""""""""""""
+----------------
 
 Messages delivered to target provisioners are JSON documents that contain 
 `subject` and `action` keys, and optionally `group` and `attributes` keys.
 The Routing_ configuration should take care to make sure that messages 
-from entity change sources are delivered to account provisioning targets.
-Likewise, messages from sources that describe group membership changes
+that describe attribute changes to subjects are delivered to provisioning targets
+that have the capability to update remote accounts.
+
+Likewise, messages from sources that describe membership changes
 should be routed to membership provisioning targets.
 
 A `group` key will appear in a delivered message only if the parsed input
 includes a group.  An `attributes` key will only appear in an output message
 if the matched route indicates that attributes are required.
+
+The :term:`PDS` requires a section used to describe how messages will be
+delivered to an AMQP exchange.  The section is called *AMQP_TARGET*, and it
+may have the following options:
+
+* *endpoint* (required) - A `Twisted endpoint`_ description for the AMQP service.
+* *exchange* (required) - The name of the exchange to which a message will be delivered.
+* *vhost* (required) - The virtual host (logical grouping of resources).
+* *user* (required) - The AMQP user used to authenticate.
+* *passwd* (required) - The AMQP password used to authenticate.
+
+"""""""
+Example
+"""""""
+
+.. code-block:: ini
+
+    [AMQP_TARGET]
+    endpoint = tls:host=broker.example.edu:port=5671:trustRoots=/etc/grouper/tls/ca:endpoint=tcp\:localhost\:5671
+    exchange = provisioner_exchange
+    vhost = /
+    user = amqp_user
+    passwd = AMQP-PASSWORD
+
+
+.. _Twisted endpoint: https://twistedmatrix.com/documents/current/core/howto/endpoints.html#servers
 
