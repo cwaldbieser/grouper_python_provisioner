@@ -1,38 +1,69 @@
 
-----------------
+================
 LDAP Provisioner
-----------------
+================
 
-The LDAPProvisioner back end stores messages in batches and reflects the changes in an LDAP
-DIT at regular intervals.  This can minimize writes to LDAP group entries that might require
-repeated modification in a short time span.  The LDAP provisioner can be configured to
-provision LDAP groups and user entries.  A single provisioner can modify both simultaneously
-or only groups or only user entries.  This can be optimal for LDAP DIT implementations that
-require user entries and groups to be updated independently of one another (e.g. OpenLDAP).
+-------------------------
+Provisioner Configuration
+-------------------------
+
+The :py:class:`LDAPProvisioner` service stores messages in batches and reflects
+the changes in an LDAP :term:`DIT` at regular intervals.  This can minimizei
+writes to LDAP group entries that might require repeated modification in a short
+time span.  The LDAP provisioner can be configured to provision LDAP groups and
+user entries.  A single provisioner can modify both simultaneously or only
+groups or only user entries.  This can be optimal for LDAP service i
+implementations that require user entries and groups to be updated independently
+of one another (e.g. OpenLDAP).
 
 The options for the LDAP provisioner are:
 
-* **log_level**: This option can override the global log level for events
-  logged by this back-end.
-* **sqlite_db**: The path to an sqlite3 database file used to store messages
-  for batch processing.  If the file does not exist, it will be created.
-* **group_map**: This JSON configuration file maps Grouper groups or stems
-  to LDAP group names or templates.  If a group message does not match an
+* **log_level** (optional) - This option can override the global log level for 
+  events logged by this service.
+* **sqlite_db** (required) - The path to an sqlite3 database file used to store
+  messages for batch processing.  If the file does not exist, it will be created.
+* **group_map** (required) - This JSON configuration file maps Grouper groups or
+  stems to LDAP group names or templates.  If a group message does not match an
   entry in this configuration, it will be ignored.
-* **url**: The LDAP service URL.  E.g. `ldaps://127.0.0.1:389`.
-* **start_tls**: After connecting to the LDAP service, request StartTLS encryption.
-* **base_dn**: The base DN used in searches when looking up group and user entries.
-* **bind_dn**: BIND as this DN prior to searching the DIT or modifying its entries.
-* **passwd**: Password for the **bind_dn** option.
-* **empty_dn**: A DN used to populate a group if it would otherwise be empty.  This
+* **url** (required) - The LDAP service URL.  E.g. `ldaps://127.0.0.1:389`.
+* **start_tls** (optional) - After connecting to the LDAP service, request
+  StartTLS encryption (default false)
+* **base_dn** (required) - The base DN used in searches when looking up group
+  and user entries.
+* **bind_dn** (required) - BIND as this DN prior to searching the :term:`DIT`
+  or modifying its entries.
+* **passwd** (required) - Password for the **bind_dn** option.
+* **empty_dn** (optional) - A DN used to populate a group if it would otherwise be empty.  This
   is useful for LDAP groups with the `groupOfNames` schema, as it is a schema
   violation to remove the `member` attribute entirely.  If all members would be removed
   from the group, the **empty_dn** value is used instead.  
   E.g. `cn=nobody,ou=nowhere,dc=example,dc=org`.
 
-"""""""""""""""""""""""
+"""""""
+Example
+"""""""
+
+.. code-block:: ini
+
+    [PROVISIONER]
+    log_level = WARN
+    url = ldap://ldap3.lafayette.edu:389/
+    start_tls = 1
+    base_dn = o=lafayette
+    bind_dn = cn=groupermanager,o=lafayette
+    passwd = LDAP-PASSWORD
+    empty_dn=cn=nobody,ou=nowhere,o=lafayette
+    group_attribute = member
+    user_attribute = memberOf
+    group_value_type = dn
+    user_value_type = dn
+    batch_interval = 20
+    group_map = /etc/grouper/provisioners/ldap/groupmap.json
+
+
+-----------------------
 Group Map Configuration
-"""""""""""""""""""""""
+-----------------------
 
 The group map is a JSON file that maps fully qualified Grouper group names to
 LDAP group identifiers (e.g. a CN).  It can also map a Grouper stem to a template.

@@ -13,9 +13,9 @@ To use this provisioner, set the *provisioner* option under the
 
 This provisioner supports the following options in the `PROVISIONER` section:
 
-* *attrib_resolver* (required) - The tag that identifies an attribute
+* **attrib_resolver** (required) - The tag that identifies an attribute
   resolver that will fetch the attributes for a given subject.
-* *parser_map* (required) - A configuration file that maps received
+* **parser_map** (required) - A configuration file that maps received
   messages to a particular type of message parser (see below).
 
 ----------------------------
@@ -97,12 +97,12 @@ The RDBMS group mapper is selected with the value `rdbms_group_mapper`.  It
 queries a relational database for the groups which the subject is a member.
 The following options may be supplied in the `RDBMS Group Mapper` section:
 
-* *query* (required) - A SQL query that returns rows with a single
+* **query** (required) - A SQL query that returns rows with a single
   column which is a group to which the subject belongs.
   The query should take a single parameter, which is the subject.
-* *driver* (required) - The name of the DBAPI2 driver module name that
+* **driver** (required) - The name of the DBAPI2 driver module name that
   will provide the underlying database connection.
-* *named_param* (optional) - Some DB drivers require that parameters be
+* **named_param** (optional) - Some DB drivers require that parameters be
   provided as mapped keywords rather than positional arguments.  If this is
   the case, this option specifies the key mapped to the subject value.
 
@@ -218,26 +218,28 @@ The LDAP attribute resolver queries attributes for a subject from an LDAP
 service.  This resolver reads its configuration from the section
 `LDAP Attribute Resolver`.  The options are as follows:
 
-* *endpoint* (required) - A `Twisted endpoint`_ description for a server.
-* *base_dn* (required) - The base DN from which to search the LDAP :term:`DIT`.
-* *bind_dn* (required) - The DN used to authenticate to the LDAP service.
-* *bind_password* (required) - The password usedto authenticate to the LDAP
+* **endpoint** (required) - A `Twisted endpoint`_ description for a server.
+* **base_dn** (required) - The base DN from which to search the LDAP :term:`DIT`.
+* **bind_dn** (required) - The DN used to authenticate to the LDAP service.
+* **bind_password** (required) - The password usedto authenticate to the LDAP
   service.
-* *filter* (required) - The LDAP filter used to select the subject.  This
+* **filter** (required) - The LDAP filter used to select the subject.  This
   filter should be a template using the 
   `Jinja2 <http://jinja.pocoo.org/docs/2.10/>`_ templating syntax.  The filter
   **escape_filter_chars** is available within the template (see the example
   below).
-* *start_tls* (required) - May be true ("1", "yes", "true", "on") or false 
+* **start_tls** (required) - May be true ("1", "yes", "true", "on") or false 
   ("0", "no", "false", "off").  If true, the attribute resolver will connect
   to an unencrypted TCP port and later negotiate TLS as part of the LDAP
   protocol *before* BINDing.  If false, the attribute resolver will not
   initiate StartTLS.  In this case, it is *strongly* recommended that the 
   endpoint (see above) be a TLS connection or some other protected endpoint.
-* *attributes* (required) - A space-separated list of attributes that will
+* **attributes** (required) - A space-separated list of attributes that will
   be requested for a subject from the LDAP service.
 
-Example:
+"""""""
+Example
+"""""""
 
 .. code-block:: ini
 
@@ -259,12 +261,12 @@ provided by the standard DBAPI2 interface.  This resolver expects to find
 its configuration options located under the `RDBMS Attribute Resolver` section
 of the main provisioner configuration file.  The options are as follows:
 
-* *query* (required) - A SQL query that returns rows of attribute
+* **query** (required) - A SQL query that returns rows of attribute
   name-value pairs.  Multi-valued attributes will have a row for each value.
   The query should take a single parameter, which is the subject.
-* *driver* (required) - The name of the DBAPI2 driver module name that
+* **driver** (required) - The name of the DBAPI2 driver module name that
   will provide the underlying database connection.
-* *named_param* (optional) - Some DB drivers require that parameters be
+* **named_param** (optional) - Some DB drivers require that parameters be
   provided as mapped keywords rather than positional arguments.  If this is
   the case, this option specifies the key mapped to the subject value.
 
@@ -275,6 +277,10 @@ etc.).
 ----------------
 Message Delivery
 ----------------
+
+;;;;;;;;;;;;;;;;;;;;;;
+AMQP Exchange Delivery
+;;;;;;;;;;;;;;;;;;;;;;
 
 Messages delivered to target provisioners are JSON documents that contain 
 `subject` and `action` keys, and optionally `group` and `attributes` keys.
@@ -293,11 +299,11 @@ The :term:`PDS` requires a section used to describe how messages will be
 delivered to an AMQP exchange.  The section is called *AMQP_TARGET*, and it
 may have the following options:
 
-* *endpoint* (required) - A `Twisted endpoint`_ description for the AMQP service.
-* *exchange* (required) - The name of the exchange to which a message will be delivered.
-* *vhost* (required) - The virtual host (logical grouping of resources).
-* *user* (required) - The AMQP user used to authenticate.
-* *passwd* (required) - The AMQP password used to authenticate.
+* **endpoint** (required) - A `Twisted endpoint`_ description for the AMQP service.
+* **exchange** (required) - The name of the exchange to which a message will be delivered.
+* **vhost** (required) - The virtual host (logical grouping of resources).
+* **user** (required) - The AMQP user used to authenticate.
+* **passwd** (required) - The AMQP password used to authenticate.
 
 """""""
 Example
