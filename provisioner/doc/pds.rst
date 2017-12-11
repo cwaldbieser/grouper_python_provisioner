@@ -30,8 +30,8 @@ used to deliver the message can be mapped to a specific parsing strategy.
 
 Parsers include:
 
-* PyChangeLoggerParser
-* SubjectAttributeUpdateParser
+* :py:class:`PyChangeLoggerParser`
+* :py:class:`SubjectAttributeUpdateParser`
 
 Additional message parsers can be created by creating classes that
 implement the :py:class:`IMessageParser` and :py:class:`IMessageParserFactory`
@@ -60,6 +60,9 @@ that must match the actual exchange and route key in order to select that
 parser.  The stanzas are tried in order, and the first match is selected.
 If no stanzas match, the message will not be parsed, and the message will
 be re-queued.
+
+When a stanza is selected, the value mapped to the `parser` key will be used
+as the tag name for creating the parser.
 
 -------------
 Group Mapping
