@@ -249,11 +249,20 @@ class ZoomProvisioner(RESTProvisioner):
             headers=headers)
         resp_code = resp.code
         remote_account = yield resp.json()
-        if not resp_code in (200, 404):
+        if not resp_code in (200, 400, 404):
             raise Exception(
                 "{}: API call to fetch remote subject returned HTTP status {}".format(
                     func_name,
                     resp_code))
+        if resp_code == 400:
+            if remote_account.get("message") == "User not belong to this account":
+                log.warn("Could not retrieve account in URL: {url}.", url=url) 
+                remote_account = None
+            else:
+                raise Exception(
+                    "{}: API call to fetch remote subject returned HTTP status {}".format(
+                        func_name,
+                        resp_code))
         if resp_code == 404:
             remote_account = None
         returnValue(remote_account)
