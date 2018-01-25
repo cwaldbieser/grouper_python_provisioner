@@ -847,6 +847,23 @@ class RESTProvisioner(object):
         account_cache = self.__account_cache
         return account_cache.get(subject, None)
 
+    def invalidate_cached_subject_api(self, api_id):
+        """
+        Remove all entries from the subject cache which have the given `api_id`.
+        """
+        log = self.log
+        account_cache = self.__account_cache
+        subjects = set([])
+        for k, v in account_cache.items():
+            if v == api_id:
+                subjects.add(k)
+        for k in subjects:
+            del account_cache[k]
+            log.debug(
+                "Invalidated subject cache fo subject '{subject}', API ID '{api_id}'.",
+                subject=k,
+                api_id=api_id)
+
     def fill_account_cache(self, account_id_map):
         """
         Sometimes, a service API only allows looking up a complete list of

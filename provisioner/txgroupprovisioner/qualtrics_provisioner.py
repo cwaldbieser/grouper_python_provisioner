@@ -230,12 +230,26 @@ class QualtricsProvisioner(RESTProvisioner):
             headers=headers,
             data=body)
         resp_code = resp.code
+        if resp_code == 400:
+            try:
+                content = yield resp.json()
+            except Exception:
+                pass
+            else:
+                error_msg = content.get(
+                    'meta', {'error': {}}).get('error', {}).get('errorMessage', None)
+                if error_msg == "Invalid userId. user does not exist":
+                    #Invalidate cache
+                    self.invalidate_cached_subject_api(api_id)
+                    raise Exception("api_deprovision_subject: API ID '{}' is invalid.  Cached subject API ID has been invalidated.".format(resp_code))
+        content = "" 
         try:
             content = yield resp.content()
         except Exception as ex:
             pass
         if resp_code != 200:
-            raise Exception("API call to deprovision subject returned HTTP status {0}".format(resp_code))
+            content = '\n{}'.format(content)
+            raise Exception("API call to deprovision subject returned HTTP status {}.{}".format(resp_code, content))
         returnValue(None)
 
     @inlineCallbacks
