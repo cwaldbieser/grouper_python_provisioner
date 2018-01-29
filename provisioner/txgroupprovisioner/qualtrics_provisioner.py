@@ -241,7 +241,7 @@ class QualtricsProvisioner(RESTProvisioner):
                 if error_msg == "Invalid userId. user does not exist":
                     #Invalidate cache
                     self.invalidate_cached_subject_api(api_id)
-                    raise Exception("api_deprovision_subject: API ID '{}' is invalid.  Cached subject API ID has been invalidated.".format(resp_code))
+                    raise Exception("api_deprovision_subject: API ID '{}' is invalid.  Cached subject API ID has been invalidated.".format(api_id))
         content = "" 
         try:
             content = yield resp.content()
