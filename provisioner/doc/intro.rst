@@ -18,7 +18,7 @@ or they may provision both memberships and accounts.
 The :term:`PDS` is a special kind of provisioner that
 can accept messages from different kinds of sources, perfrom group and
 attribute lookups, compose standard messages, and route them to the intended
-provisioners.
+provisioners. 
 
 The general architecture for this provisioning system looks like a pipline
 that flows from event sources to a provisioner delivery service and finally to
