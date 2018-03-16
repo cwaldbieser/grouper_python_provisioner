@@ -3,11 +3,10 @@
 THISDIR="$( cd $(dirname $0); pwd)"
 SCRIPT="$THISDIR/$(basename $0)"
 ITERATION=${ITERATION:-1}
-FPM=/usr/local/bin/fpm
+FPM=${FPM:-/usr/bin/fpm}
 OS_DEPS='jython >= 2.7.0'
 RPM_STEM="pychangelogger"
 SOFTWARE=$(readlink -f "/opt/pychangelogger")
-WEBROOT=$(readlink -f "/var/www/lutil")
 AFTER_INSTALL="$THISDIR/post-install.sh"
 OUTDIR=${OUTDIR:-/var/local/rpms}
 
