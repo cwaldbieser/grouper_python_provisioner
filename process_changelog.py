@@ -124,7 +124,7 @@ def load_config(config_name):
     buf = StringIO.StringIO(defaults)
     scp.readfp(buf)
     filenames = [
-        "/etc/grouper/process_changelog.cfg", 
+        "/etc/pychangelogger/process_changelog.cfg", 
         os.path.expanduser("~/.process_changelog.cfg"),
     ]
     if config_name is not None:
