@@ -1,4 +1,0 @@
-[
-    ["ldap_queue", "ldap.#"],
-    ["mysql_queue", "mysql.#"]
-]

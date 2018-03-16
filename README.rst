@@ -1,6 +1,6 @@
-==========================
-Grouper Changelog Consumer
-==========================
+==============
+pychangelogger
+==============
 
 This Grouper changelog consumer is a Jython script that sends Grouper
 changelog events of interest to an AMQP exchange.  The routing key
@@ -11,7 +11,7 @@ location of the group within the Grouper hierarchy.
 Installation
 ------------
 
-A working `jython` interpreter (v2.5.3+) is required to run the script.
+A working `jython` interpreter (v2.7) is required to run the script.
 
 The `RABBITMQ_JAR` environment variable in `changelogger.sh` needs to be set to the
 location of the rabbitmq Java client JAR.
@@ -35,12 +35,10 @@ Configuring the Script
 
 The changelogger looks for its configuration file(s) in the following places:
 
-* `/etc/grouper/process_changelog.cfg`
+* `/etc/pychangelogger/process_changelog.cfg`
 * `~/.process_changelog.cfg`
-* `./process_changelog.cfg`
 
 Settings in the user config override the settings in the system wide config.
-Likewise, settings in the local config override settings in the user config.
 
 The main configuration has the following sections and options:
 
@@ -58,6 +56,32 @@ The main configuration has the following sections and options:
     * `keystore_passphrase`: (Optional) passphrase used to access the trust store.
     * `route_key`: (Optional) the routing key to use when delivering AMQP
       messages to the exchange (default 'kiki.grouper').
+
+Example config file, `/etc/pychangelogger/process_changelog.cfg`:
+
+.. code:: ini
+
+    [APPLICATION]
+    changefile = /var/run/pychangelogger/last_change_id.txt
+    routemap = /etc/pychangelogger/routemap.cfg
+
+    [AMQP]
+    host = localhost
+    port = 5671
+    #;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    # For TLS, set `port` to a TLS port on the exchange.
+    # A TLS connection requires the following options:
+    # # The trust store (The CA certs you trust).
+    # keystore = /path/to/keystore.jks
+    # # The passphrase used to access the trust store.
+    # keystore_passphrase = password_for_the_keystore
+    #;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    keystore = /etc/grouper/ssl/ca/changelogger_truststore.jks
+    keystore_passphrase = KEYSTORE-PASSWORD
+    vhost = /
+    user = AMQP-SERVICE-ACCOUNT
+    password = AMQP-EXCHANGE-PASSWD
+    exchange = EXCHANGE-NAME
 
 -----------------------------------
 Connecting to the exchange with TLS

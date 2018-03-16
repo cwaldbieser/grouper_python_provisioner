@@ -123,14 +123,13 @@ def load_config(config_name):
     scp = SafeConfigParser()
     buf = StringIO.StringIO(defaults)
     scp.readfp(buf)
+    filenames = [
+        "/etc/grouper/process_changelog.cfg", 
+        os.path.expanduser("~/.process_changelog.cfg"),
+    ]
     if config_name is not None:
-        files = scp.read([config_name])
-    else:
-        files = scp.read([
-            "/etc/grouper/process_changelog.cfg", 
-            os.path.expanduser("~/.process_changelog.cfg"),
-            os.path.join(os.path.dirname(__file__), "process_changelog.cfg"),
-            os.path.join(os.path.abspath(os.curdir), "process_changelog.cfg")])
+        filenames.append(config_name)
+    files = scp.read(filenames)
     info("Read configuration from: %s" % (', '.join(files)))
     return scp
 
