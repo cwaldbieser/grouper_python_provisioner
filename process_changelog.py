@@ -112,7 +112,7 @@ def load_config(config_name):
         changefile = %s
 
         [AMQP]
-        host = locahost
+        host = localhost
         port = 5672
         vhost = /
         user = guest

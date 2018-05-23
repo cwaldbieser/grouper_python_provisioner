@@ -17,5 +17,5 @@ else
 fi
 export CLASSPATH
 cd "$THISDIR"
-"$GSH_JYTHON" -p "python.cachedir=$CACHEDIR" "$CHANGELOGGER"
+"$GSH_JYTHON" -p "python.cachedir=$CACHEDIR" "$CHANGELOGGER" -c /etc/pychangelogger/process_changelog.cfg
 
